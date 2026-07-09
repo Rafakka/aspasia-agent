@@ -41,7 +41,7 @@ class Source(BaseModel):
 class ResearchState(TypedDict, total=False):
     topic: str
     feedback: str  # human feedback when a plan is sent back for revision
-    plan: ResearchPlan
+    plan: dict  # ResearchPlan.model_dump() — plain dict keeps checkpoints serializer-friendly
     search_results: list[SearchResult]
     sources: list[Source]
     search_round: int

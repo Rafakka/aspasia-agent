@@ -69,7 +69,8 @@ def plan(state: ResearchState) -> dict:
         PLAN_PROMPT.format(topic=state["topic"], feedback_block=feedback_block)
     )
     log.info("plan: objective=%r queries=%s", research_plan.objective, research_plan.search_queries)
-    return {"plan": research_plan, "feedback": ""}
+    # stored as a plain dict so checkpointed state stays serializer-friendly
+    return {"plan": research_plan.model_dump(), "feedback": ""}
 
 
 def approve_plan(state: ResearchState) -> Command:
@@ -78,11 +79,10 @@ def approve_plan(state: ResearchState) -> Command:
     interrupt() checkpoints the run and surfaces the payload to the caller;
     the graph resumes only when the caller sends Command(resume=<decision>).
     """
-    research_plan = state["plan"]
     decision = interrupt(
         {
             "question": "Approve this research plan?",
-            "plan": research_plan.model_dump(),
+            "plan": state["plan"],
         }
     )
     if isinstance(decision, dict) and decision.get("action") == "revise":
@@ -95,7 +95,7 @@ def approve_plan(state: ResearchState) -> Command:
 def search(state: ResearchState) -> dict:
     """Run every planned query; on a retry round, broaden the queries."""
     round_num = state.get("search_round", 0) + 1
-    queries = list(state["plan"].search_queries)
+    queries = list(state["plan"]["search_queries"])
     if round_num > 1:
         # Coverage came up short — broaden rather than repeat verbatim.
         queries = [f"{state['topic']} overview", f"{state['topic']} analysis"] + queries
@@ -117,7 +117,7 @@ def select_sources(state: ResearchState) -> dict:
     selector = llm.get_llm().with_structured_output(SourceSelection)
     selection = selector.invoke(
         SELECT_PROMPT.format(
-            objective=state["plan"].objective,
+            objective=state["plan"]["objective"],
             candidates=listing,
             max_sources=config.MAX_SOURCES,
         )
@@ -157,12 +157,12 @@ def synthesize(state: ResearchState) -> dict:
         f'<source id="{i}" title="{s.title}" url="{s.url}">\n{s.text}\n</source>'
         for i, s in enumerate(sources, start=1)
     )
-    outline = "\n".join(f"- {h}" for h in state["plan"].outline)
+    outline = "\n".join(f"- {h}" for h in state["plan"]["outline"])
     log.info("synthesize: writing report from %d sources", len(sources))
     response = llm.get_llm().invoke(
         SYNTHESIZE_PROMPT.format(
             topic=state["topic"],
-            objective=state["plan"].objective,
+            objective=state["plan"]["objective"],
             outline=outline,
             sources=source_blocks,
         )
@@ -174,4 +174,4 @@ def synthesize(state: ResearchState) -> dict:
             usage.get("input_tokens"),
             usage.get("output_tokens"),
         )
-    return {"report": response.text() if callable(getattr(response, "text", None)) else str(response.content)}
+    return {"report": response.text}

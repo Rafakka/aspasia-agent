@@ -1,0 +1,34 @@
+2026-07-09 13:45:57,191 INFO    research_agent.cli: run start: topic='How retrieval-augmented generation (RAG) improves the accuracy of enterprise AI assistants' auto=True
+2026-07-09 13:45:57,237 INFO    research_agent.nodes: plan: drafting plan for topic 'How retrieval-augmented generation (RAG) improves the accuracy of enterprise AI assistants'
+2026-07-09 13:46:04,910 INFO    research_agent.nodes: plan: objective='This report explains how retrieval-augmented generation (RAG) improves the factual accuracy and reliability of enterprise AI assistants, including the underlying mechanisms, supporting evidence, and current limitations.' queries=['what is retrieval-augmented generation RAG architecture explained', 'how RAG reduces hallucinations and improves accuracy in enterprise LLM assistants', 'RAG enterprise AI assistant case studies benchmarks accuracy metrics 2024', 'RAG evaluation metrics faithfulness grounding retrieval quality studies', 'limitations challenges of RAG in enterprise deployments criticism']
+2026-07-09 13:46:04,922 INFO    research_agent.nodes: approve_plan: plan approved by human
+2026-07-09 13:46:04,924 INFO    research_agent.tools: search: 'what is retrieval-augmented generation RAG architecture explained' (max 8 results)
+2026-07-09 13:46:08,404 INFO    research_agent.tools: search: 'what is retrieval-augmented generation RAG architecture explained' -> 8 results
+2026-07-09 13:46:08,405 INFO    research_agent.tools: search: 'how RAG reduces hallucinations and improves accuracy in enterprise LLM assistants' (max 8 results)
+2026-07-09 13:46:09,852 INFO    research_agent.tools: search: 'how RAG reduces hallucinations and improves accuracy in enterprise LLM assistants' -> 8 results
+2026-07-09 13:46:09,852 INFO    research_agent.tools: search: 'RAG enterprise AI assistant case studies benchmarks accuracy metrics 2024' (max 8 results)
+2026-07-09 13:46:12,295 INFO    research_agent.tools: search: 'RAG enterprise AI assistant case studies benchmarks accuracy metrics 2024' -> 8 results
+2026-07-09 13:46:12,296 INFO    research_agent.tools: search: 'RAG evaluation metrics faithfulness grounding retrieval quality studies' (max 8 results)
+2026-07-09 13:46:16,315 INFO    research_agent.tools: search: 'RAG evaluation metrics faithfulness grounding retrieval quality studies' -> 8 results
+2026-07-09 13:46:16,315 INFO    research_agent.tools: search: 'limitations challenges of RAG in enterprise deployments criticism' (max 8 results)
+2026-07-09 13:46:18,715 INFO    research_agent.tools: search: 'limitations challenges of RAG in enterprise deployments criticism' -> 8 results
+2026-07-09 13:46:18,716 INFO    research_agent.nodes: search: round 1 collected 40 unique results
+2026-07-09 13:46:24,246 INFO    research_agent.nodes: select_sources: These selections balance authoritative foundational explanations (IBM, AWS Prescriptive Guidance), a rigorous academic benchmark for supporting evidence (RAGBench arXiv), enterprise-focused hallucination grounding (Glean), evaluation metrics (Braintrust), and a substantive limitations analysis (TechTarget), covering mechanisms, evidence, and limitations without duplicating sites.
+2026-07-09 13:46:24,246 INFO    research_agent.nodes: select_sources: fetching 6 of 40 candidates
+2026-07-09 13:46:24,248 INFO    research_agent.tools: fetch: https://www.ibm.com/think/topics/retrieval-augmented-generation
+2026-07-09 13:46:26,295 INFO    research_agent.tools: fetch: https://www.ibm.com/think/topics/retrieval-augmented-generation -> 8000 chars
+2026-07-09 13:46:26,296 INFO    research_agent.tools: fetch: https://docs.aws.amazon.com/prescriptive-guidance/latest/retrieval-augmented-generation-options/what-is-rag.html
+2026-07-09 13:46:27,474 INFO    research_agent.tools: fetch: https://docs.aws.amazon.com/prescriptive-guidance/latest/retrieval-augmented-generation-options/what-is-rag.html -> 4500 chars
+2026-07-09 13:46:27,474 INFO    research_agent.tools: fetch: https://arxiv.org/abs/2407.11005
+2026-07-09 13:46:28,551 INFO    research_agent.tools: fetch: https://arxiv.org/abs/2407.11005 -> 3480 chars
+2026-07-09 13:46:28,552 INFO    research_agent.tools: fetch: https://www.glean.com/perspectives/when-llms-hallucinate-in-enterprise-contexts-and-how-contextual-grounding
+2026-07-09 13:46:29,941 INFO    research_agent.tools: fetch: https://www.glean.com/perspectives/when-llms-hallucinate-in-enterprise-contexts-and-how-contextual-grounding -> 8000 chars
+2026-07-09 13:46:29,942 INFO    research_agent.tools: fetch: https://www.techtarget.com/searchenterpriseai/tip/Understanding-the-limitations-and-challenges-of-RAG-systems
+2026-07-09 13:46:31,214 INFO    research_agent.tools: fetch: https://www.techtarget.com/searchenterpriseai/tip/Understanding-the-limitations-and-challenges-of-RAG-systems -> 7570 chars
+2026-07-09 13:46:31,215 INFO    research_agent.tools: fetch: https://www.braintrust.dev/articles/what-is-rag-evaluation
+2026-07-09 13:46:32,868 INFO    research_agent.tools: fetch: https://www.braintrust.dev/articles/what-is-rag-evaluation -> 8000 chars
+2026-07-09 13:46:32,868 INFO    research_agent.nodes: fetch: 6/6 sources fetched successfully
+2026-07-09 13:46:32,869 INFO    research_agent.nodes: route: 6 sources -> synthesize
+2026-07-09 13:46:32,871 INFO    research_agent.nodes: synthesize: writing report from 6 sources
+2026-07-09 13:47:42,813 INFO    research_agent.nodes: synthesize: done (input_tokens=12996 output_tokens=5666)
+2026-07-09 13:47:42,835 INFO    research_agent.cli: run complete: report=reports\report-how-retrieval-augmented-generation-rag-improves-the-accuracy.md sources=6

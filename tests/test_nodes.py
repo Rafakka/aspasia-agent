@@ -25,14 +25,14 @@ PLAN = ResearchPlan(
     objective="Explain X",
     search_queries=["x basics", "x criticism"],
     outline=["Background", "Findings"],
-)
+).model_dump()
 
 
 def test_plan_node_returns_plan_and_clears_feedback(monkeypatch):
-    stub = StubLLM(PLAN)
+    stub = StubLLM(ResearchPlan.model_validate(PLAN))
     monkeypatch.setattr(nodes.llm, "get_llm", lambda **kw: stub)
     out = nodes.plan({"topic": "X", "feedback": "too narrow"})
-    assert out["plan"] is PLAN
+    assert out["plan"] == PLAN
     assert out["feedback"] == ""
     # human feedback must actually reach the prompt on a revision pass
     assert "too narrow" in stub.prompts[0]
