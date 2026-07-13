@@ -8,6 +8,8 @@ Built as a working demo of the patterns I use in client agent projects: explicit
 flow, human-in-the-loop approval gates before any external actions, bounded retries, structured
 outputs, and per-node unit tests.
 
+![The agentic loop: plan → human approval → search → select sources → fetch → synthesize, with a revise loop back to plan and a bounded retry loop back to search](assets/agentic-loop.svg)
+
 ## The graph
 
 ```mermaid
