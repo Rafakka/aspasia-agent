@@ -1,3 +1,11 @@
+## Attribution
+
+Aspásia was initially developed from
+[Foundry AI's LangGraph Research Agent](https://github.com/foundry-ai-dev/langgraph-research-agent).
+
+The original project provided the initial research-agent architecture
+that was adapted and substantially extended for Aspásia.
+
 # langgraph-research-agent
 
 A multi-step **LangGraph research agent**: give it a topic, it plans its research, pauses for
