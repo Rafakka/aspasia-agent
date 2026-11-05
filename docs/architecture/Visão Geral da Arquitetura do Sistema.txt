@@ -1,0 +1,70 @@
+Documentação arquitetural v0.1
+
+1. Diagrama geral dos domínios
+
+Este diagrama apresenta os conceitos que já definimos e como eles se conectam.
+
+Interpretação:
+- Investigation representa o trabalho investigativo.
+- SourceConfiguration define as restrições de pesquisa.
+- InvestigationSource associa investigações às fontes.
+- Source representa uma origem informacional.
+- Resource representa um documento ou objeto digital.
+- Evidence representa informações extraídas de recursos.
+- ResearchReport representa o resultado da investigação.
+- ContentArtifact representa o conteúdo produzido a partir de um relatório.
+
+2. Diagrama de relacionamentos e cardinalidades
+
+Decisões de cardinalidade:
+Relacionamento	Cardinalidade	Significado
+Investigation → SourceConfiguration	1:1	Cada investigação possui sua configuração
+Investigation → InvestigationSource	1:N	Uma investigação pode utilizar várias fontes
+Source → InvestigationSource	1:N	Uma fonte pode participar de várias investigações
+Source → Resource	1:N	Uma fonte pode disponibilizar vários recursos
+Resource → Evidence	1:N	Um recurso pode originar várias evidências
+Investigation → ResearchReport	1:N	Uma investigação pode gerar versões de relatórios
+ResearchReport → ContentArtifact	1:N	Um relatório pode gerar vários conteúdos
+
+Uma observação: o diagrama ER já antecipa algumas decisões de persistência, como uma tabela associativa e uma tabela própria para configuração. 
+Elas são representações relacionais dos nossos objetos de domínio, não necessariamente classes que precisamos implementar exatamente dessa maneira.
+
+3. Diagrama estrutural das entidades Python
+
+Esses enums representam vocabulários controlados. Os valores não devem ser inventados livremente por cada módulo.
+
+4. Fluxo de configuração e investigação
+
+Este diagrama representa as decisões que o usuário toma e como a Aspásia deve reagir.
+
+Regra já estabelecida: uma configuração sem categorias selecionadas não significa todas as categorias. Significa que a Aspásia ainda precisa perguntar ao usuário.
+
+Também não pode ampliar silenciosamente as categorias caso não encontre material suficiente.
+
+5. Arquitetura geral: Control Plane e Data Plane
+Por último, o diagrama que orientará a organização dos módulos.
+
+A divisão de responsabilidades fica assim:
+Control Plane	Data Plane
+Interpreta a intenção	Descobre fontes
+Coordena a investigação	Registra fontes
+Solicita configurações	Registra recursos
+Decide quando investigar	Adquire documentos
+Analisa evidências	Processa arquivos
+Gera relatórios	Armazena evidências
+Produz conteúdo	Mantém os dados disponíveis
+
+O LangGraph será principalmente o mecanismo de orquestração do Control Plane. Os workers e serviços de dados não precisam ser nós do LangGraph.
+
+6. Registro das decisões arquiteturais
+Para evitar que decisões sejam esquecidas ou reinterpretadas, vamos manter este registro como referência.
+ID	Decisão	Situação
+ADR-001	Utilizar Pydantic para modelos de domínio	Definida
+ADR-002	Utilizar Enum para vocabulários controlados	Definida
+ADR-003	Separar entidades de domínio do estado LangGraph	Definida
+ADR-004	Categorias vazias exigem interação do usuário	Definida
+ADR-005	Fontes são compartilhadas entre investigações	Definida
+ADR-006	Evidence referencia Resource, não Source diretamente	Definida
+ADR-007	Utilizar InvestigationSource como associação	Proposta aceita
+ADR-008	Separar Control Plane e Data Plane	Definida
+ADR-009	Preservar LangGraph como orquestrador	Definida
