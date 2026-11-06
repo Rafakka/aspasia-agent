@@ -1,145 +1,299 @@
-## Attribution
 
-Aspásia was initially developed from
-[Foundry AI's LangGraph Research Agent](https://github.com/foundry-ai-dev/langgraph-research-agent).
+# Aspásia
 
-The original project provided the initial research-agent architecture
-that was adapted and substantially extended for Aspásia.
+**A modular platform for research, knowledge organization, and content production, powered by specialized AI agents.**
 
-# langgraph-research-agent
+Aspásia is an evolving platform designed to investigate topics, organize information into traceable knowledge, and transform research findings into different content formats.
 
-A multi-step **LangGraph research agent**: give it a topic, it plans its research, pauses for
-**human approval**, searches the web, triages and fetches sources, and writes a **cited markdown
-report** — with a full logged trace of every run.
+Rather than relying on a single general-purpose agent, Aspásia follows a modular architecture in which specialized agents perform distinct responsibilities, coordinated through a central control layer and supervised by humans.
 
-Built as a working demo of the patterns I use in client agent projects: explicit graph control
-flow, human-in-the-loop approval gates before any external actions, bounded retries, structured
-outputs, and per-node unit tests.
+## Project Vision
 
-![The agentic loop: plan → human approval → search → select sources → fetch → synthesize, with a revise loop back to plan and a bounded retry loop back to search](assets/agentic-loop.svg)
+Aspásia aims to establish a structured workflow between research and communication.
 
-## The graph
+Its central idea is to separate two activities:
 
-```mermaid
----
-config:
-  flowchart:
-    curve: linear
----
-graph TD;
-	__start__([<p>__start__</p>]):::first
-	plan(plan)
-	approve_plan(approve_plan)
-	search(search)
-	select_sources(select_sources)
-	fetch(fetch)
-	synthesize(synthesize)
-	__end__([<p>__end__</p>]):::last
-	__start__ --> plan;
-	approve_plan -.-> plan;
-	approve_plan -.-> search;
-	fetch -.-> search;
-	fetch -.-> synthesize;
-	plan --> approve_plan;
-	search --> select_sources;
-	select_sources --> fetch;
-	synthesize --> __end__;
-	classDef default fill:#f2f0ff,line-height:1.2
-	classDef first fill-opacity:0
-	classDef last fill:#bfb6fc
-```
+- **Research:** investigate a subject, discover sources, acquire documents, analyze evidence, identify contradictions, and produce research reports.
+- **Content Production:** transform approved research into accessible and engaging content while preserving its factual foundations.
 
-*(Diagram exported from the actual compiled graph: `python -m research_agent.graph`)*
+This separation allows research results to be reused across different content formats without repeating the entire investigation.
 
-| Node | What it does |
+## Core Principles
+
+- **Evidence-based research:** conclusions should be grounded in identifiable sources and supporting evidence.
+- **Human-in-the-loop:** important research and editorial decisions remain subject to human review and approval.
+- **Modularity:** research, acquisition, processing, and content production have independent responsibilities.
+- **Traceability:** information should retain its relationship with the documents and sources from which it originated.
+- **Reusability:** approved research reports can support multiple content artifacts.
+- **Extensibility:** new providers, document processors, and specialized agents can be introduced without redesigning the entire platform.
+
+## Architecture Overview
+
+Aspásia is organized around two complementary architectural areas.
+
+### Control Plane
+
+Responsible for coordinating the platform's activities and managing interactions with users.
+
+Its responsibilities include:
+
+- Interpreting research requests.
+- Managing investigation workflows.
+- Coordinating specialized agents.
+- Requesting user configuration and approval.
+- Analyzing research results.
+- Managing reports and content production.
+
+LangGraph is used as an orchestration mechanism for agent workflows.
+
+### Data Plane
+
+Responsible for discovering, acquiring, processing, and organizing information.
+
+Its responsibilities include:
+
+- Source discovery.
+- Source and resource registration.
+- Document acquisition.
+- File storage.
+- Document processing.
+- Evidence extraction and storage.
+
+The Control Plane coordinates operations, while the Data Plane provides the information and processing capabilities required by those operations.
+
+## Specialized Agents
+
+### Research Agent
+
+The Research Agent is responsible for investigating topics and producing structured research reports.
+
+Its intended workflow includes:
+
+1. Research planning.
+2. Human approval of the research plan.
+3. Source discovery.
+4. Source selection.
+5. Resource acquisition.
+6. Document processing.
+7. Evidence analysis.
+8. Research report generation.
+9. Human review and approval.
+
+### Content Agent
+
+The Content Agent is responsible for transforming approved research into communication artifacts.
+
+Its planned capabilities include:
+
+- Research report interpretation.
+- Narrative and discourse strategy.
+- Content structure design.
+- Adaptation to different formats.
+- Script generation.
+- Editorial review.
+
+The Content Agent is designed to use approved research as its informational foundation rather than conducting an independent investigation for every new content artifact.
+
+## Research and Knowledge Model
+
+Aspásia uses distinct concepts to represent the different stages of information processing.
+
+| Concept | Responsibility |
 |---|---|
-| `plan` | LLM drafts a structured research plan (objective, 3–5 search queries, report outline) |
-| `approve_plan` | **Human-in-the-loop gate** — the graph pauses (`interrupt()`) until a person approves the plan or sends it back with feedback |
-| `search` | Runs every planned query against web search; retry rounds broaden the queries |
-| `select_sources` | LLM triages results — picks the most substantive, citable URLs (hallucinated URLs are dropped defensively) |
-| `fetch` | Downloads pages and extracts main text; failed or thin pages are skipped, not fatal |
-| `synthesize` | Writes the report with inline `[n]` citations against the fetched sources only |
+| Investigation | Represents a research activity. |
+| Source | Represents an informational origin. |
+| Resource | Represents a digital document or object. |
+| Evidence | Represents information extracted from a resource. |
+| Research Report | Represents the consolidated result of an investigation. |
+| Content Artifact | Represents content produced from a research report. |
 
-The `fetch → search` dotted edge is a **bounded retry**: if fewer than `MIN_SOURCES` pages were
-usable, the agent searches again with broadened queries — up to `MAX_SEARCH_ROUNDS` — instead of
-writing a thin report or looping forever.
+This separation establishes the foundation for traceability, information reuse, and future persistence.
 
-## Human-in-the-loop approval
+## Current MVP Scope
 
-Nothing touches the network until a person signs off on the plan. The graph checkpoints itself at
-`approve_plan` via LangGraph's `interrupt()` and only resumes when the caller sends a decision:
+The initial MVP focuses on establishing the research workflow and its underlying data acquisition architecture.
 
+Current capabilities include:
+
+- Research planning with an LLM.
+- Human approval and revision of research plans.
+- Web search and source selection.
+- HTML page acquisition and text extraction.
+- Initial document detection and storage components.
+- Local LLM integration through Ollama.
+- LangGraph-based workflow orchestration.
+- Automated tests for implemented components.
+
+The document acquisition layer is being expanded to support different resource types. PDF acquisition and storage are part of this evolution; PDF text extraction is not currently implemented.
+
+The complete Evidence Store, centralized orchestration of multiple agents, and Content Agent are part of the broader development roadmap.
+
+## Technology Stack
+
+| Technology | Purpose |
+|---|---|
+| Python | Main development language. |
+| LangGraph | Agent workflow orchestration. |
+| LangChain | LLM integration. |
+| Ollama | Local LLM inference. |
+| Pydantic | Data validation and structured models. |
+| HTTPX | HTTP requests and resource acquisition. |
+| Trafilatura | HTML content extraction. |
+| DDGS | Web search provider. |
+| Pytest | Automated testing. |
+
+## Project Structure
+
+The project follows a domain-oriented organization.
+
+```text
+src/research_agent/
+├── core/
+│   └── models/
+│       └── resource.py
+│
+├── discovery/
+│   └── models.py
+│
+├── ingestion/
+│   ├── acquisition.py
+│   ├── detector.py
+│   ├── storage.py
+│   └── workers/
+│       └── html.py
+│
+├── graph.py
+├── nodes.py
+├── state.py
+├── tools.py
+├── llm.py
+└── config.py
+
+docs/
+├── architecture/
+└── diagrams/
+
+tests/
 ```
-=== Proposed research plan ===
-Objective: ...
 
-Search queries:
-  - ...
+The structure will evolve as additional domains and specialized agents are implemented.
 
-Report outline:
-  - ...
+## Installation and Configuration
 
-Approve plan? [y = approve / r = revise / q = quit]
-```
+### Requirements
 
-Answering `r` sends your feedback back into the `plan` node, which redrafts and asks again. This
-is the same pattern I use for client agents that gate risky actions (sending emails, writing to a
-database, spending money) behind human sign-off.
+- Python 3.11 or later.
+- Git.
+- Ollama.
+- A compatible local language model.
 
-## Logged traces
-
-Every run writes a complete trace to `traces/` — every node entry, every query, every fetched URL,
-token usage — so you can see exactly why the agent did what it did. A real example run is in
-[`traces/trace-example.log`](traces/trace-example.log), and the report it produced is in
-[`examples/`](examples/).
-
-## Quick start
+### Clone the repository
 
 ```bash
-git clone https://github.com/foundry-ai-dev/langgraph-research-agent
-cd langgraph-research-agent
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
-cp .env.example .env                                 # add your ANTHROPIC_API_KEY
-
-research-agent "your topic here"
+git clone https://github.com/Rafakka/aspasia-agent.git
+cd aspasia-agent
 ```
 
-Useful flags: `--auto` skips the approval gate (for scripted runs); `--out-dir` changes where the
-report lands.
+### Create a virtual environment
 
-The model defaults to Claude (`claude-opus-4-8`) via `langchain-anthropic` and is configurable
-with `RESEARCH_AGENT_MODEL` — the graph itself is model-agnostic.
+```bash
+python -m venv .venv
+```
+
+Windows:
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+Linux:
+
+```bash
+source .venv/bin/activate
+```
+
+### Install dependencies
+
+```bash
+pip install -e ".[dev]"
+```
+
+### Configure Ollama
+
+Start Ollama and download a model:
+
+```bash
+ollama pull qwen3:4b
+```
+
+Configure the model in your `.env` file:
+
+```env
+RESEARCH_AGENT_MODEL=qwen3:4b
+```
+
+The LLM integration is centralized in `llm.py`, allowing the model provider to be changed without embedding provider-specific logic throughout the research workflow.
+
+## Running the Application
+
+The current research workflow can be executed through the command-line interface:
+
+```bash
+research-agent "Your research topic"
+```
+
+To skip the interactive approval gate:
+
+```bash
+research-agent "Your research topic" --auto
+```
+
+To specify the report output directory:
+
+```bash
+research-agent "Your research topic" --out-dir reports
+```
 
 ## Tests
 
-Every node is unit-tested in isolation with stubbed LLM and network calls — no API key needed:
+Run the test suite with:
 
 ```bash
-pytest
+python -m pytest
 ```
 
-Covered: plan revision feedback actually reaching the prompt, retry-round query broadening,
-hallucinated-URL filtering in source selection, failed-fetch handling, and all three branches of
-the coverage router.
+Tests cover the research workflow and implemented ingestion components.
 
-## Project layout
+Additional tests will be introduced as the architecture evolves.
 
-```
-src/research_agent/
-├── state.py     # graph state + pydantic models (plan, sources, selection)
-├── tools.py     # web search + page fetch (pure I/O, no LLM)
-├── nodes.py     # one function per graph node
-├── graph.py     # graph assembly; `python -m research_agent.graph` prints mermaid
-├── tracing.py   # per-run trace files
-├── llm.py       # single place the model is constructed
-├── config.py    # env-overridable settings
-└── cli.py       # terminal driver incl. the approval prompt
-tests/           # node-level tests, no network, no API key
-```
+## Architecture Documentation
 
----
+More detailed architectural decisions and diagrams are available in:
 
-*Built by [Foundry AI](https://github.com/foundry-ai-dev) — custom AI agents & RAG systems
-(LangGraph · Pinecone · FAISS). I build agents like this for clients: workflow automation,
-research agents, support triage, data extraction.*
+- `docs/architecture/` — architecture overview and design decisions.
+- `docs/diagrams/` — domain, relationship, workflow, and system architecture diagrams.
+
+## Development Roadmap
+
+Aspásia is under active development.
+
+The main development directions are:
+
+1. Complete the research and resource acquisition pipeline.
+2. Integrate acquisition results into the LangGraph workflow.
+3. Establish source and resource registries.
+4. Implement evidence extraction and persistence.
+5. Consolidate research report generation and approval.
+6. Develop the Content Agent.
+7. Introduce centralized orchestration between specialized agents.
+8. Expand resilience, observability, and automated testing.
+
+## Attribution
+
+Aspásia was initially developed from [Foundry AI's LangGraph Research Agent](https://github.com/foundry-ai-dev/langgraph-research-agent).
+
+The original project provided the initial research-agent architecture, including its LangGraph workflow, human-in-the-loop approval mechanism, and research synthesis process.
+
+Aspásia is an independent adaptation that extends this foundation with a broader architectural vision, domain-oriented organization, document acquisition capabilities, and a planned multi-agent research and content production platform.
+
+The original project's authorship and contributions are acknowledged with appreciation.
