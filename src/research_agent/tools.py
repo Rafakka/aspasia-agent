@@ -2,12 +2,10 @@
 
 import logging
 
-import httpx
-import trafilatura
 from ddgs import DDGS
 
 from . import config
-from .state import SearchResult, Source
+from .state import SearchResult
 
 log = logging.getLogger("research_agent.tools")
 
@@ -45,25 +43,3 @@ def dedupe_results(results: list[SearchResult]) -> list[SearchResult]:
         unique.append(r)
     return unique
 
-
-def fetch_page(url: str, title: str = "") -> Source | None:
-    """Download a page and extract its main text. Returns None on any failure."""
-    log.info("fetch: %s", url)
-    try:
-        resp = httpx.get(
-            url,
-            timeout=config.FETCH_TIMEOUT_S,
-            follow_redirects=True,
-            headers={"User-Agent": "Mozilla/5.0 (research-agent demo)"},
-        )
-        resp.raise_for_status()
-    except Exception as exc:
-        log.warning("fetch failed for %s: %s", url, exc)
-        return None
-    text = trafilatura.extract(resp.text) or ""
-    if len(text) < 200:  # boilerplate-only pages aren't usable evidence
-        log.warning("fetch: %s extracted only %d chars, skipping", url, len(text))
-        return None
-    text = text[: config.MAX_PAGE_CHARS]
-    log.info("fetch: %s -> %d chars", url, len(text))
-    return Source(title=title or url, url=url, text=text)

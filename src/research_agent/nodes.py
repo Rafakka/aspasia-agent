@@ -5,7 +5,21 @@ import logging
 from langgraph.types import Command, interrupt
 
 from . import config, llm, tools
-from .state import ResearchPlan, ResearchState, Source, SourceSelection
+
+from .ingestion.acquisition import (
+    AcquisitionError,
+    AcquisitionOptions,
+    AcquisitionResult,
+    AcquisitionStatus,
+    acquire_resource,
+)
+
+from .state import (
+    AcquiredResource,
+    ResearchPlan,
+    ResearchState,
+    SourceSelection,
+)
 
 log = logging.getLogger("research_agent.nodes")
 
@@ -112,7 +126,7 @@ def select_sources(state: ResearchState) -> dict:
     """LLM triage: pick which search results are worth fetching."""
     candidates = state["search_results"]
     if not candidates:
-        return {"sources": []}
+        return {"search_results": []}
     listing = "\n".join(f"- {r.title}\n  {r.url}\n  {r.snippet}" for r in candidates[:40])
     selector = llm.get_llm().with_structured_output(SourceSelection)
     selection = selector.invoke(
@@ -130,35 +144,137 @@ def select_sources(state: ResearchState) -> dict:
 
 
 def fetch(state: ResearchState) -> dict:
-    """Download and extract text from the selected sources."""
-    sources: list[Source] = []
-    for r in state["search_results"]:
-        page = tools.fetch_page(r.url, title=r.title)
-        if page:
-            sources.append(page)
-    log.info("fetch: %d/%d sources fetched successfully", len(sources), len(state["search_results"]))
-    return {"sources": state.get("sources", []) + sources}
+    """
+    Acquires selected resources and accumulates their outcomes.
+
+    Each search result is processed independently, so an unexpected
+    acquisition error does not interrupt the remaining resources.
+    """
+    search_results = state.get("search_results", [])
+    acquired_resources: list[AcquiredResource] = []
+
+    options = AcquisitionOptions(
+        store_original=True,
+        extract_content=True,
+    )
+
+    for result in search_results:
+        try:
+            acquisition = acquire_resource(
+                search_result=result,
+                options=options,
+            )
+
+        except Exception as exc:
+            log.exception(
+                "Unexpected acquisition error for %s",
+                result.url,
+            )
+
+            acquisition = AcquisitionResult(
+                status=AcquisitionStatus.FAILED,
+                error=AcquisitionError(
+                    code="UNEXPECTED_ACQUISITION_ERROR",
+                    message=str(exc),
+                ),
+            )
+
+        acquired_resources.append(
+            AcquiredResource(
+                search_result=result,
+                acquisition=acquisition,
+            )
+        )
+
+        log.info(
+            "fetch: %s -> %s",
+            result.url,
+            acquisition.status.value,
+        )
+
+    # Preserve resources acquired in previous search rounds.
+    previous_resources = state.get("acquired_resources", [])
+    accumulated_resources = previous_resources + acquired_resources
+
+    log.info(
+        "fetch: acquired %d resources in this round; %d accumulated",
+        len(acquired_resources),
+        len(accumulated_resources),
+    )
+
+    return {
+        "acquired_resources": accumulated_resources,
+    }
 
 
 def route_after_fetch(state: ResearchState) -> str:
-    """Branch: enough evidence to write, or go search again (bounded retries)."""
-    have = len(state.get("sources", []))
-    if have >= config.MIN_SOURCES or state.get("search_round", 0) >= config.MAX_SEARCH_ROUNDS:
-        log.info("route: %d sources -> synthesize", have)
+    """Branch based on usable extracted content, or search again."""
+    acquired_resources = state.get("acquired_resources", [])
+
+    usable_resources = [
+        item
+        for item in acquired_resources
+        if (
+            item.acquisition.extracted_content
+            and item.acquisition.extracted_content.strip()
+        )
+    ]
+
+    have = len(usable_resources)
+
+    if (
+        have >= config.MIN_SOURCES
+        or state.get("search_round", 0) >= config.MAX_SEARCH_ROUNDS
+    ):
+        log.info("route: %d usable sources -> synthesize", have)
         return "synthesize"
-    log.info("route: only %d sources (< %d) -> another search round", have, config.MIN_SOURCES)
+
+    log.info(
+        "route: only %d usable sources (< %d) -> another search round",
+        have,
+        config.MIN_SOURCES,
+    )
     return "search"
 
 
+
 def synthesize(state: ResearchState) -> dict:
-    """Write the final cited markdown report from the fetched sources."""
-    sources = state["sources"]
+    """Write the final cited markdown report from acquired resources."""
+
+    usable_resources = [
+        item
+        for item in state.get("acquired_resources", [])
+        if (
+            item.acquisition.extracted_content
+            and item.acquisition.extracted_content.strip()
+        )
+    ]
+
+    if not usable_resources:
+        log.warning("synthesize: no usable resources available")
+        return {
+            "report": "zero recursos, favor consultar busca de fontes"
+        }
+
     source_blocks = "\n\n".join(
-        f'<source id="{i}" title="{s.title}" url="{s.url}">\n{s.text}\n</source>'
-        for i, s in enumerate(sources, start=1)
+        (
+            f'<source id="{i}" title="{item.search_result.title}" '
+            f'url="{item.search_result.url}">\n'
+            f'{item.acquisition.extracted_content}\n'
+            f'</source>'
+        )
+        for i, item in enumerate(usable_resources, start=1)
     )
-    outline = "\n".join(f"- {h}" for h in state["plan"]["outline"])
-    log.info("synthesize: writing report from %d sources", len(sources))
+
+    outline = "\n".join(
+        f"- {heading}" for heading in state["plan"]["outline"]
+    )
+
+    log.info(
+        "synthesize: writing report from %d usable resources",
+        len(usable_resources),
+    )
+
     response = llm.get_llm().invoke(
         SYNTHESIZE_PROMPT.format(
             topic=state["topic"],
@@ -167,11 +283,15 @@ def synthesize(state: ResearchState) -> dict:
             sources=source_blocks,
         )
     )
+
     usage = getattr(response, "usage_metadata", None)
+
     if usage:
         log.info(
             "synthesize: done (input_tokens=%s output_tokens=%s)",
             usage.get("input_tokens"),
             usage.get("output_tokens"),
         )
+
     return {"report": response.text}
+

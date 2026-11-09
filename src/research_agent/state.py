@@ -50,18 +50,6 @@ class AcquiredResource(BaseModel):
     acquisition: AcquisitionResult
 
 
-class Source(BaseModel):
-    """
-    Temporary compatibility model for the existing synthesis node.
-
-    Represents extracted textual content, not the digital resource itself.
-    """
-
-    title: str
-    url: str
-    text: str
-
-
 class ResearchState(TypedDict, total=False):
     topic: str
     feedback: str
@@ -75,9 +63,6 @@ class ResearchState(TypedDict, total=False):
 
     # Acquisition
     acquired_resources: list[AcquiredResource]
-
-    # Transitional field used by the current synthesis implementation.
-    sources: list[Source]
 
     # Final output
     report: str
