@@ -1,4 +1,5 @@
 
+import pytest
 
 from research_agent.ingestion.workers.html import extract_html
 
@@ -33,11 +34,8 @@ def test_extract_html_content():
 
 
 def test_extract_html_empty_content():
-    try:
+    with pytest.raises(ValueError):
         extract_html(b"")
-        assert False, "Expected ValueError"
-    except ValueError:
-        pass
 
 
 def test_extract_html_without_readable_content():

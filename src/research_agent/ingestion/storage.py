@@ -82,70 +82,33 @@ def get_file_extension(resource: Resource) -> str:
     )
 
 
-def store_resource(
-    resource: Resource,
-    content: bytes,
-) -> Resource:
-    """
-    Stores the original resource in Aspásia's local storage.
-
-    Returns an updated Resource containing:
-        - content_hash
-        - storage_path
-        - acquired_at
-
-    The storage_path is relative to the configured storage root.
-
-    Raises:
-        ValueError: If the resource content is empty.
-        OSError: If the filesystem operation fails.
-    """
-
+def store_resource(resource: Resource, content: bytes) -> Resource:
     if not content:
         raise ValueError("Cannot store an empty resource.")
 
     storage_root = get_storage_root()
-
-    # Use the acquisition date to organize resources.
     acquired_at = datetime.now(timezone.utc)
 
-    date_directory = Path(
-        str(acquired_at.year),
-        f"{acquired_at.month:02d}",
-        f"{acquired_at.day:02d}",
-    )
-
+    content_hash = calculate_sha256(content)
     extension = get_file_extension(resource)
 
-    filename = f"{resource.id}{extension}"
-
-    relative_path = date_directory / filename
+    relative_path = Path(f"{content_hash}{extension}")
     absolute_path = storage_root / relative_path
 
-    # Ensure the destination directory exists.
-    absolute_path.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    if not absolute_path.exists():
+        absolute_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Calculate the hash before writing.
-    content_hash = calculate_sha256(content)
+        temporary_path = absolute_path.with_name(
+            f"{absolute_path.name}.tmp"
+        )
 
-    # Write to a temporary file before replacing the destination.
-    temporary_path = absolute_path.with_name(
-        f"{absolute_path.name}.tmp"
-    )
+        try:
+            temporary_path.write_bytes(content)
+            os.replace(temporary_path, absolute_path)
+        except OSError:
+            temporary_path.unlink(missing_ok=True)
+            raise
 
-    try:
-        temporary_path.write_bytes(content)
-        os.replace(temporary_path, absolute_path)
-
-    except OSError:
-        # Clean up a temporary file if writing or replacement fails.
-        temporary_path.unlink(missing_ok=True)
-        raise
-
-    # Return a new Resource instance with storage metadata.
     return resource.model_copy(
         update={
             "content_hash": content_hash,
