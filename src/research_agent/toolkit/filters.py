@@ -40,3 +40,19 @@ def dedupe_results(results: list[SearchResult]) -> list[SearchResult]:
         unique.append(result)
 
     return unique
+
+def group_results_by_source_domain(
+    results: list[SearchResult],
+) -> dict[str, list[SearchResult]]:
+    """Group search results by their registrable source domain."""
+    grouped: dict[str, list[SearchResult]] = {}
+
+    for result in results:
+        domain = extract_source_domain(result.url)
+
+        if not domain:
+            continue
+
+        grouped.setdefault(domain, []).append(result)
+
+    return grouped

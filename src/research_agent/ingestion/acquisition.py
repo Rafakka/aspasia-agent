@@ -50,6 +50,9 @@ class AcquisitionResult(BaseModel):
 
     status: AcquisitionStatus
 
+    original_url: str | None = None
+    final_url: str | None = None
+
     resource: Resource | None = None
     extracted_content: str | None = None
     error: AcquisitionError | None = None
@@ -63,13 +66,44 @@ class AcquisitionResult(BaseModel):
         }
 
 
+def _build_acquisition_result(
+    *,
+    status: AcquisitionStatus,
+    original_url: str | None,
+    final_url: str | None = None,
+    resource: Resource | None = None,
+    extracted_content: str | None = None,
+    error: AcquisitionError | None = None,
+) -> AcquisitionResult:
+    """
+    Builds a consistent acquisition result.
+
+    Preserves URL identity and any available acquisition data,
+    regardless of the operation outcome.
+    """
+    if resource is not None:
+        final_url = final_url or resource.url
+
+    return AcquisitionResult(
+        status=status,
+        original_url=original_url,
+        final_url=final_url,
+        resource=resource,
+        extracted_content=extracted_content,
+        error=error,
+    )
+
 def _failure(
     code: str,
     message: str,
     resource: Resource | None = None,
+    original_url: str | None = None,
+    final_url: str | None = None,
 ) -> AcquisitionResult:
-    return AcquisitionResult(
+    return _build_acquisition_result(
         status=AcquisitionStatus.FAILED,
+        original_url=original_url,
+        final_url=final_url,
         resource=resource,
         error=AcquisitionError(
             code=code,
@@ -98,6 +132,8 @@ def acquire_resource(
 
     options = options or AcquisitionOptions()
 
+    original_url = search_result.url
+
     if not options.store_original and not options.extract_content:
         return _failure(
             code="INVALID_OPTIONS",
@@ -105,16 +141,20 @@ def acquire_resource(
                 "At least one operation must be requested: "
                 "store_original or extract_content."
             ),
+            original_url=original_url,
         )
 
+    response = None
     # 1. Download resource.
     try:
         response = httpx.get(
-            search_result.url,
+            original_url,
             follow_redirects=True,
             timeout=REQUEST_TIMEOUT,
             headers={"User-Agent": USER_AGENT},
         )
+
+        final_url = str(response.url)
         response.raise_for_status()
 
     except httpx.HTTPError as exc:
@@ -126,6 +166,12 @@ def acquire_resource(
         return _failure(
             code="DOWNLOAD_FAILED",
             message=str(exc),
+            original_url=original_url,
+            final_url=(
+                str(response.url)
+                if response is not None
+                else None
+            ),
         )
 
     content = response.content
@@ -136,6 +182,8 @@ def acquire_resource(
         return _failure(
             code="EMPTY_RESOURCE",
             message="The downloaded resource is empty.",
+            original_url=original_url,
+            final_url=final_url,
         )
 
     # 2. Detect resource type.
@@ -154,6 +202,8 @@ def acquire_resource(
         return _failure(
             code="RESOURCE_DETECTION_FAILED",
             message=str(exc),
+            original_url=original_url,
+            final_url=final_url,
         )
 
     # 3. Create resource metadata.
@@ -181,21 +231,27 @@ def acquire_resource(
                 code="STORAGE_FAILED",
                 message=str(exc),
                 resource=resource,
+                original_url=original_url,
+                final_url=final_url,
             )
 
     # 5. Return immediately if extraction was not requested.
     if not options.extract_content:
-        return AcquisitionResult(
+        return _build_acquisition_result(
             status=AcquisitionStatus.SUCCESS,
             resource=resource,
+            original_url=original_url,
+            final_url=final_url,
         )
 
     # 6. PDF extraction is not implemented yet.
     if resource_type == ResourceType.PDF:
         if not options.store_original:
-            return AcquisitionResult(
+            return _build_acquisition_result(
                 status=AcquisitionStatus.UNSUPPORTED_EXTRACTION,
                 resource=resource,
+                original_url=original_url,
+                final_url=final_url,
                 error=AcquisitionError(
                     code="PDF_EXTRACTION_UNSUPPORTED",
                     message=(
@@ -206,8 +262,10 @@ def acquire_resource(
                 ),
             )
 
-        return AcquisitionResult(
+        return _build_acquisition_result(
             status=AcquisitionStatus.UNSUPPORTED_EXTRACTION,
+            original_url=original_url,
+            final_url=final_url,
             resource=resource,
             error=AcquisitionError(
                 code="PDF_EXTRACTION_UNSUPPORTED",
@@ -232,9 +290,11 @@ def acquire_resource(
                 "HTML extraction failed: %s",
                 final_url,
             )
-            return AcquisitionResult(
+            return _build_acquisition_result(
                 status=AcquisitionStatus.PARTIAL,
                 resource=resource,
+                original_url=original_url,
+                final_url=final_url,
                 error=AcquisitionError(
                     code="EXTRACTION_FAILED",
                     message=str(exc),
@@ -242,9 +302,11 @@ def acquire_resource(
             )
 
         if not extracted_content:
-            return AcquisitionResult(
+            return _build_acquisition_result(
                 status=AcquisitionStatus.PARTIAL,
                 resource=resource,
+                original_url=original_url,
+                final_url=final_url,
                 error=AcquisitionError(
                     code="EMPTY_EXTRACTION",
                     message=(
@@ -254,15 +316,19 @@ def acquire_resource(
                 ),
             )
 
-        return AcquisitionResult(
+        return _build_acquisition_result(
             status=AcquisitionStatus.SUCCESS,
+            original_url=original_url,
+            final_url=final_url,
             resource=resource,
             extracted_content=extracted_content,
         )
 
     # 8. Other resource types are not extractable yet.
-    return AcquisitionResult(
+    return _build_acquisition_result(
         status=AcquisitionStatus.UNSUPPORTED_EXTRACTION,
+        original_url=original_url,
+        final_url=final_url,
         resource=resource,
         error=AcquisitionError(
             code="UNSUPPORTED_RESOURCE_TYPE",

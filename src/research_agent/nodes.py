@@ -4,6 +4,8 @@ import logging
 
 from langgraph.types import Command, interrupt
 
+from research_agent.state import SearchResult
+
 from . import config, llm
 from .toolkit import filters, search as search_tool
 
@@ -67,6 +69,26 @@ Requirements:
 - If sources disagree or evidence is thin, say so explicitly — do not paper over gaps.
 - End with a `## Sources` section listing each source as `[n] Title — URL`.
 - Do not invent facts that are not in the sources."""
+
+
+def _get_resource_urls(
+    search_result: SearchResult,
+    acquisition: AcquisitionResult,
+) -> set[str]:
+    urls = {
+        search_result.url,
+        acquisition.original_url,
+        acquisition.final_url,
+    }
+
+    if acquisition.resource:
+        urls.add(acquisition.resource.url)
+
+    return {
+        filters.normalize_source_url(url)
+        for url in urls
+        if url
+    }
 
 
 def plan(state: ResearchState) -> dict:
@@ -181,24 +203,16 @@ def fetch(state: ResearchState) -> dict:
         extract_content=True,
     )
 
-    # Map normalized source URLs to their existing resource positions.
     identity_to_index: dict[str, int] = {}
 
     for index, item in enumerate(accumulated_resources):
-        urls = [
-            item.search_result.url,
-            (
-                item.acquisition.resource.url
-                if item.acquisition.resource
-                else None
-            ),
-        ]
+        identities = _get_resource_urls(
+            item.search_result,
+            item.acquisition,
+        )
 
-        for url in urls:
-            if url:
-                identity_to_index[
-                    filters.normalize_source_url(url)
-                ] = index
+        for identity in identities:
+            identity_to_index[identity] = index
 
     # Avoid retrying the same source twice within one search round.
     processed_this_round: set[str] = set()
@@ -275,21 +289,13 @@ def fetch(state: ResearchState) -> dict:
             accumulated_resources.append(resource_record)
             resource_index = len(accumulated_resources) - 1
 
-        # Register both original and final URLs as aliases for this source.
-        urls = [
-            result.url,
-            (
-                acquisition.resource.url
-                if acquisition.resource
-                else None
-            ),
-        ]
+        identities = _get_resource_urls(
+            result,
+            acquisition,
+        )
 
-        for url in urls:
-            if url:
-                identity_to_index[
-                    filters.normalize_source_url(url)
-                ] = resource_index
+        for identity in identities:
+            identity_to_index[identity] = resource_index
 
         acquired_this_round += 1
 
@@ -316,35 +322,22 @@ def route_after_fetch(state: ResearchState) -> str:
 
     acquired_resources = state.get("acquired_resources", [])
 
-    seen_sources: set[str] = set()
+    usable_results = [
+        item.search_result
+        for item in acquired_resources
+        if (
+            item.acquisition.extracted_content
+            and item.acquisition.extracted_content.strip()
+        )
+    ]
 
-    for item in acquired_resources:
-        content = item.acquisition.extracted_content
+    unique_results = filters.dedupe_results(usable_results)
 
-        if not content or not content.strip():
-            continue
+    grouped_sources = filters.group_results_by_source_domain(
+        unique_results
+    )
 
-        urls = [
-            item.search_result.url,
-            (
-                item.acquisition.resource.url
-                if item.acquisition.resource
-                else None
-            ),
-        ]
-
-        identities = {
-            filters.normalize_source_url(url)
-            for url in urls
-            if url
-        }
-
-        # A source is counted only once, even if multiple records
-        # refer to its original or redirected URL.
-        if identities.isdisjoint(seen_sources):
-            seen_sources.update(identities)
-
-    have = len(seen_sources)
+    have = len(grouped_sources)
 
     if (
         have >= config.MIN_SOURCES
