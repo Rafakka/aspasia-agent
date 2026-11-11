@@ -4,7 +4,8 @@ import logging
 
 from langgraph.types import Command, interrupt
 
-from . import config, llm, tools
+from . import config, llm
+from .toolkit import filters, search as search_tool
 
 from .ingestion.acquisition import (
     AcquisitionError,
@@ -116,8 +117,8 @@ def search(state: ResearchState) -> dict:
         log.info("search: round %d, broadened to %d queries", round_num, len(queries))
     results = []
     for q in queries:
-        results.extend(tools.web_search(q))
-    unique = tools.dedupe_results(results)
+        results.extend(search_tool.web_search(q))
+    unique = filters.dedupe_results(results)
     log.info("search: round %d collected %d unique results", round_num, len(unique))
     return {"search_results": unique, "search_round": round_num}
 
@@ -142,23 +143,103 @@ def select_sources(state: ResearchState) -> dict:
     log.info("select_sources: fetching %d of %d candidates", len(chosen), len(candidates))
     return {"search_results": chosen}
 
+def should_retry_acquisition(
+    acquisition: AcquisitionResult,
+) -> bool:
+    """Determine whether an acquisition result is eligible for retry."""
+
+    if acquisition.extracted_content:
+        return False
+
+    if acquisition.error is None:
+        return False
+
+    retryable_errors = {
+        "DOWNLOAD_FAILED",
+        "EMPTY_RESOURCE",
+        "EXTRACTION_FAILED",
+        "UNEXPECTED_ACQUISITION_ERROR",
+    }
+
+    return acquisition.error.code in retryable_errors
 
 def fetch(state: ResearchState) -> dict:
     """
-    Acquires selected resources and accumulates their outcomes.
+    Acquire selected resources while preserving one record per source.
 
-    Each search result is processed independently, so an unexpected
-    acquisition error does not interrupt the remaining resources.
+    Previously acquired sources are reused unless their previous
+    acquisition is eligible for retry and the attempt limit allows it.
     """
     search_results = state.get("search_results", [])
-    acquired_resources: list[AcquiredResource] = []
+
+    accumulated_resources = list(
+        state.get("acquired_resources", [])
+    )
 
     options = AcquisitionOptions(
         store_original=True,
         extract_content=True,
     )
 
+    # Map normalized source URLs to their existing resource positions.
+    identity_to_index: dict[str, int] = {}
+
+    for index, item in enumerate(accumulated_resources):
+        urls = [
+            item.search_result.url,
+            (
+                item.acquisition.resource.url
+                if item.acquisition.resource
+                else None
+            ),
+        ]
+
+        for url in urls:
+            if url:
+                identity_to_index[
+                    filters.normalize_source_url(url)
+                ] = index
+
+    # Avoid retrying the same source twice within one search round.
+    processed_this_round: set[str] = set()
+
+    acquired_this_round = 0
+
     for result in search_results:
+        identity = filters.normalize_source_url(result.url)
+
+        if identity in processed_this_round:
+            continue
+
+        processed_this_round.add(identity)
+
+        existing_index = identity_to_index.get(identity)
+
+        previous_resource = (
+            accumulated_resources[existing_index]
+            if existing_index is not None
+            else None
+        )
+
+        if previous_resource is not None:
+            if (
+                previous_resource.attempt_count
+                >= config.MAX_ACQUISITION_ATTEMPTS
+                or not should_retry_acquisition(
+                    previous_resource.acquisition
+                )
+            ):
+                log.info(
+                    "fetch: skipping previously acquired source %s",
+                    result.url,
+                )
+                continue
+
+            attempt_count = previous_resource.attempt_count + 1
+
+        else:
+            attempt_count = 1
+
         try:
             acquisition = acquire_resource(
                 search_result=result,
@@ -179,26 +260,49 @@ def fetch(state: ResearchState) -> dict:
                 ),
             )
 
-        acquired_resources.append(
-            AcquiredResource(
-                search_result=result,
-                acquisition=acquisition,
-            )
+        resource_record = AcquiredResource(
+            search_result=result,
+            acquisition=acquisition,
+            attempt_count=attempt_count,
         )
+
+        if existing_index is not None:
+            # Replace the previous result instead of creating a duplicate.
+            accumulated_resources[existing_index] = resource_record
+            resource_index = existing_index
+
+        else:
+            accumulated_resources.append(resource_record)
+            resource_index = len(accumulated_resources) - 1
+
+        # Register both original and final URLs as aliases for this source.
+        urls = [
+            result.url,
+            (
+                acquisition.resource.url
+                if acquisition.resource
+                else None
+            ),
+        ]
+
+        for url in urls:
+            if url:
+                identity_to_index[
+                    filters.normalize_source_url(url)
+                ] = resource_index
+
+        acquired_this_round += 1
 
         log.info(
-            "fetch: %s -> %s",
+            "fetch: %s -> %s (attempt %d)",
             result.url,
             acquisition.status.value,
+            attempt_count,
         )
 
-    # Preserve resources acquired in previous search rounds.
-    previous_resources = state.get("acquired_resources", [])
-    accumulated_resources = previous_resources + acquired_resources
-
     log.info(
-        "fetch: acquired %d resources in this round; %d accumulated",
-        len(acquired_resources),
+        "fetch: processed %d acquisitions; %d total unique resources",
+        acquired_this_round,
         len(accumulated_resources),
     )
 
@@ -208,34 +312,54 @@ def fetch(state: ResearchState) -> dict:
 
 
 def route_after_fetch(state: ResearchState) -> str:
-    """Branch based on usable extracted content, or search again."""
+    """Branch based on unique usable sources, or search again."""
+
     acquired_resources = state.get("acquired_resources", [])
 
-    usable_resources = [
-        item
-        for item in acquired_resources
-        if (
-            item.acquisition.extracted_content
-            and item.acquisition.extracted_content.strip()
-        )
-    ]
+    seen_sources: set[str] = set()
 
-    have = len(usable_resources)
+    for item in acquired_resources:
+        content = item.acquisition.extracted_content
+
+        if not content or not content.strip():
+            continue
+
+        urls = [
+            item.search_result.url,
+            (
+                item.acquisition.resource.url
+                if item.acquisition.resource
+                else None
+            ),
+        ]
+
+        identities = {
+            filters.normalize_source_url(url)
+            for url in urls
+            if url
+        }
+
+        # A source is counted only once, even if multiple records
+        # refer to its original or redirected URL.
+        if identities.isdisjoint(seen_sources):
+            seen_sources.update(identities)
+
+    have = len(seen_sources)
 
     if (
         have >= config.MIN_SOURCES
         or state.get("search_round", 0) >= config.MAX_SEARCH_ROUNDS
     ):
-        log.info("route: %d usable sources -> synthesize", have)
+        log.info("route: %d unique usable sources -> synthesize", have)
         return "synthesize"
 
     log.info(
-        "route: only %d usable sources (< %d) -> another search round",
+        "route: only %d unique usable sources (< %d) -> another search round",
         have,
         config.MIN_SOURCES,
     )
-    return "search"
 
+    return "search"
 
 
 def synthesize(state: ResearchState) -> dict:

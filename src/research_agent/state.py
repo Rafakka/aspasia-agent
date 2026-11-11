@@ -48,6 +48,7 @@ class AcquiredResource(BaseModel):
 
     search_result: SearchResult
     acquisition: AcquisitionResult
+    attempt_count: int = Field(default=1, ge=1)
 
 
 class ResearchState(TypedDict, total=False):

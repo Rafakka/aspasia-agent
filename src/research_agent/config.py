@@ -14,3 +14,4 @@ MAX_SEARCH_ROUNDS = int(os.getenv("MAX_SEARCH_ROUNDS", "2"))
 MAX_PAGE_CHARS = int(os.getenv("MAX_PAGE_CHARS", "8000"))
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "8192"))
 FETCH_TIMEOUT_S = float(os.getenv("FETCH_TIMEOUT_S", "15"))
+MAX_ACQUISITION_ATTEMPTS = 2
