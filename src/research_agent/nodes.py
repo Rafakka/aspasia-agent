@@ -10,6 +10,8 @@ from research_agent.state import SearchResult
 
 from research_agent.discovery.runtime import ResearchContext
 
+from research_agent.discovery.source_filter import SourceFilter
+
 from research_agent.discovery.source_selection import (
         SourceSelectionConfig,
         SourceSelectionMode,
@@ -17,6 +19,8 @@ from research_agent.discovery.source_selection import (
 from research_agent.core.persistence.repositories.verified_source_registry import (
         VerifiedSourceRegistry,
         )
+
+from research_agent.discovery.source_filter import SourceFilter
 
 from . import config, llm
 from .toolkit import filters, search as search_tool
@@ -138,7 +142,7 @@ def approve_plan(state: ResearchState) -> Command:
         log.info("approve_plan: human requested revision: %r", decision.get("feedback", ""))
         return Command(goto="plan", update={"feedback": decision.get("feedback", "")})
     log.info("approve_plan: plan approved by human")
-    return Command(goto="search")
+    return Command(goto="configure_sources")
 
 
 def configure_sources(
@@ -198,20 +202,56 @@ def configure_sources(
 
 
 def search(state: ResearchState) -> dict:
-    """Run every planned query; on a retry round, broaden the queries."""
     round_num = state.get("search_round", 0) + 1
     queries = list(state["plan"]["search_queries"])
+
     if round_num > 1:
-        # Coverage came up short — broaden rather than repeat verbatim.
-        queries = [f"{state['topic']} overview", f"{state['topic']} analysis"] + queries
-        log.info("search: round %d, broadened to %d queries", round_num, len(queries))
+        queries = [
+            f"{state['topic']} overview",
+            f"{state['topic']} analysis",
+        ] + queries
+
+        log.info(
+            "search: broadening queries for round %d",
+            round_num,
+        )
+
     results = []
+
     for q in queries:
         results.extend(search_tool.web_search(q))
-    unique = filters.dedupe_results(results)
-    log.info("search: round %d collected %d unique results", round_num, len(unique))
-    return {"search_results": unique, "search_round": round_num}
 
+    # 1. Remove resultados duplicados
+    unique = filters.dedupe_results(results)
+
+    # 2. Recupera a configuração de seleção de fontes
+    # Se ela não existir, utiliza ALL como padrão.
+    source_selection = state.get("source_selection")
+
+    if source_selection is None:
+        source_selection = SourceSelectionConfig(
+            mode=SourceSelectionMode.ALL
+        )
+
+    # 3. Aplica a política de seleção de fontes
+    filtered = SourceFilter.apply(
+        results=unique,
+        config=source_selection,
+        get_url=lambda result: result.url,
+    )
+
+    log.info(
+        "search: round %d collected %d unique results, "
+        "%d remaining after source filtering",
+        round_num,
+        len(unique),
+        len(filtered),
+    )
+
+    return {
+        "search_results": filtered,
+        "search_round": round_num,
+    }
 
 def select_sources(state: ResearchState) -> dict:
     """LLM triage: pick which search results are worth fetching."""
