@@ -2,9 +2,21 @@
 
 import logging
 
+from langgraph.runtime import Runtime
+
 from langgraph.types import Command, interrupt
 
 from research_agent.state import SearchResult
+
+from research_agent.discovery.runtime import ResearchContext
+
+from research_agent.discovery.source_selection import (
+        SourceSelectionConfig,
+        SourceSelectionMode,
+        )
+from research_agent.core.persistence.repositories.verified_source_registry import (
+        VerifiedSourceRegistry,
+        )
 
 from . import config, llm
 from .toolkit import filters, search as search_tool
@@ -118,7 +130,7 @@ def approve_plan(state: ResearchState) -> Command:
     """
     decision = interrupt(
         {
-            "question": "Approve this research plan?",
+            "type": "plan_approval",
             "plan": state["plan"],
         }
     )
@@ -127,6 +139,62 @@ def approve_plan(state: ResearchState) -> Command:
         return Command(goto="plan", update={"feedback": decision.get("feedback", "")})
     log.info("approve_plan: plan approved by human")
     return Command(goto="search")
+
+
+def configure_sources(
+    state: ResearchState,
+    runtime: Runtime[ResearchContext],
+) -> dict:
+    """Configure whether research should use the verified source catalog."""
+
+    with runtime.context.session_factory() as session:
+        registry = VerifiedSourceRegistry(session)
+        verified_domains = registry.list_verified_domains()
+
+    decision = interrupt(
+        {
+            "type": "source_configuration",
+            "question": (
+                "Do you want to restrict research to your "
+                "pre-approved sources?"
+            ),
+            "verified_source_count": len(verified_domains),
+        }
+    )
+
+    if decision is False:
+        log.info("configure_sources: searching all sources")
+        return {
+            "source_selection": SourceSelectionConfig(
+                mode=SourceSelectionMode.ALL
+            )
+        }
+
+    if decision is not True:
+        raise ValueError("Invalid source configuration decision.")
+
+    if not verified_domains:
+        log.warning(
+            "configure_sources: verified source list is empty; "
+            "searching all sources"
+        )
+        return {
+            "source_selection": SourceSelectionConfig(
+                mode=SourceSelectionMode.ALL
+            )
+        }
+
+    log.info(
+        "configure_sources: restricting search to %d verified domains",
+        len(verified_domains),
+    )
+
+    return {
+        "source_selection": SourceSelectionConfig(
+            mode=SourceSelectionMode.VERIFIED_ONLY,
+            verified_domains=verified_domains,
+        )
+    }
 
 
 def search(state: ResearchState) -> dict:

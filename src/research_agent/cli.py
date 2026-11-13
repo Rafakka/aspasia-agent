@@ -13,8 +13,11 @@ from pathlib import Path
 
 from langgraph.types import Command
 
+from .database import SessionLocal
 from .graph import compile_graph
 from .tracing import setup_tracing
+
+from research_agent.discovery.runtime import ResearchContext
 
 log = logging.getLogger("research_agent.cli")
 
@@ -67,12 +70,14 @@ def main() -> None:
     app = compile_graph()
     run_config = {"configurable": {"thread_id": str(uuid.uuid4())}}
 
-    result = app.invoke({"topic": args.topic}, run_config)
+    context = ResearchContext(session_factory=SessionLocal)
+
+    result = app.invoke({"topic": args.topic}, run_config, context=context)
     # interrupt() pauses here — loop until the human approves and the run completes
     while "__interrupt__" in result:
         payload = result["__interrupt__"][0].value
         decision = _ask_approval(payload["plan"], args.auto)
-        result = app.invoke(Command(resume=decision), run_config)
+        result = app.invoke(Command(resume=decision), run_config, context=context)
 
     report = result.get("report", "")
     if not report:

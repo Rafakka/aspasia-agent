@@ -3,24 +3,27 @@
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
+from research_agent.discovery.runtime import ResearchContext
+
 from . import nodes
 from .state import ResearchState
 
 
 def build_graph():
-    g = StateGraph(ResearchState)
+    g = StateGraph(ResearchState, context_schema=ResearchContext)
 
     g.add_node("plan", nodes.plan)
     # destinations documents where the Command node can go, so it renders in the diagram
-    g.add_node("approve_plan", nodes.approve_plan, destinations=("plan", "search"))
+    g.add_node( "approve_plan", nodes.approve_plan, destinations=("plan", "configure_sources"),)
+    g.add_node("configure_sources", nodes.configure_sources)
     g.add_node("search", nodes.search)
     g.add_node("select_sources", nodes.select_sources)
     g.add_node("fetch", nodes.fetch)
     g.add_node("synthesize", nodes.synthesize)
-
     g.add_edge(START, "plan")
     g.add_edge("plan", "approve_plan")
     # approve_plan routes itself via Command (human decision)
+    g.add_edge("configure_sources", "search")
     g.add_edge("search", "select_sources")
     g.add_edge("select_sources", "fetch")
     g.add_conditional_edges("fetch", nodes.route_after_fetch, ["search", "synthesize"])

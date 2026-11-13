@@ -1,13 +1,14 @@
 
 """Graph state and the structured objects that flow through it."""
 
+
 from typing import TypedDict
 
 from pydantic import BaseModel, Field
 
 from research_agent.discovery.models import SearchResult
 from research_agent.ingestion.acquisition import AcquisitionResult
-
+from research_agent.discovery.source_selection import SourceSelectionConfig
 
 class ResearchPlan(BaseModel):
     """The plan the agent proposes before any searching happens."""
@@ -57,6 +58,8 @@ class ResearchState(TypedDict, total=False):
 
     # Research planning
     plan: dict
+
+    source_selection: SourceSelectionConfig
 
     # Discovery
     search_results: list[SearchResult]
