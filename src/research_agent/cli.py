@@ -26,6 +26,40 @@ def _slugify(text: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return slug[:60] or "report"
 
+def _ask_source_configuration(
+    verified_source_count: int,
+    auto: bool,
+) -> bool:
+    """Ask whether research should use only pre-approved sources."""
+
+    if auto:
+        print("(--auto: searching all sources)")
+        return False
+
+    if verified_source_count == 0:
+        print(
+            "No pre-approved sources registered. "
+            "Searching all sources."
+        )
+        return False
+
+    while True:
+        answer = input(
+            f"Restrict research to your {verified_source_count} "
+            "pre-approved sources? [y = yes / n = no / q = quit] "
+        ).strip().lower()
+
+        if answer in ("y", "yes"):
+            return True
+
+        if answer in ("n", "no"):
+            return False
+
+        if answer in ("q", "quit"):
+            print("Research aborted.")
+            sys.exit(0)
+
+
 
 def _print_plan(plan: dict) -> None:
     print("\n=== Proposed research plan ===")
@@ -73,11 +107,34 @@ def main() -> None:
     context = ResearchContext(session_factory=SessionLocal)
 
     result = app.invoke({"topic": args.topic}, run_config, context=context)
-    # interrupt() pauses here — loop until the human approves and the run completes
+
     while "__interrupt__" in result:
         payload = result["__interrupt__"][0].value
-        decision = _ask_approval(payload["plan"], args.auto)
-        result = app.invoke(Command(resume=decision), run_config, context=context)
+
+        interrupt_type = payload.get("type")
+
+        if interrupt_type == "source_configuration":
+            decision = _ask_source_configuration(
+                verified_source_count=payload["verified_source_count"],
+                auto=args.auto,
+            )
+
+        elif "plan" in payload:
+            decision = _ask_approval(
+                plan=payload["plan"],
+                auto=args.auto,
+            )
+
+        else:
+            raise ValueError(
+                f"Unknown interrupt payload: {payload}"
+            )
+
+        result = app.invoke(
+            Command(resume=decision),
+            run_config,
+            context=context,
+        )
 
     report = result.get("report", "")
     if not report:

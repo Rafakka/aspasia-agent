@@ -2,9 +2,13 @@
 
 import logging
 
+from time import perf_counter
+
 from langgraph.runtime import Runtime
 
 from langgraph.types import Command, interrupt
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from research_agent.state import SearchResult
 
@@ -19,8 +23,6 @@ from research_agent.discovery.source_selection import (
 from research_agent.core.persistence.repositories.verified_source_registry import (
         VerifiedSourceRegistry,
         )
-
-from research_agent.discovery.source_filter import SourceFilter
 
 from . import config, llm
 from .toolkit import filters, search as search_tool
@@ -47,10 +49,27 @@ PLAN_PROMPT = """You are a research planner. Produce a research plan for this to
 <topic>
 {topic}
 </topic>
+
 {feedback_block}
-Design 3-5 web search queries that together cover the topic from complementary angles
-(definitions/background, current state, data or evidence, criticism or open questions),
-and an outline of 4-6 section headings for the final report."""
+
+LANGUAGE REQUIREMENTS:
+- Identify the language used in the user's original topic.
+- Write the research objective in that language.
+- Generate all search queries in that language.
+- Write all report outline headings in that language.
+- Preserve proper nouns and technical terminology.
+- Do not translate the user's topic unless necessary.
+
+RESEARCH PLANNING REQUIREMENTS:
+- Design 3-5 web search queries.
+- Cover complementary angles:
+  definitions and background, historical context, current state,
+  data or evidence, criticism and open questions.
+- Avoid redundant queries.
+- Prefer specific search terms over unnecessarily long questions.
+- Consider terminology commonly used in the topic's original language.
+
+Produce an objective, search queries, and an outline of 4-6 section headings."""
 
 SELECT_PROMPT = """You are selecting sources for a research report.
 
@@ -216,10 +235,16 @@ def search(state: ResearchState) -> dict:
             round_num,
         )
 
-    results = []
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        batches = list(
+            executor.map(search_tool.web_search, queries)
+        )
 
-    for q in queries:
-        results.extend(search_tool.web_search(q))
+    results = [
+        result
+        for batch in batches
+        for result in batch
+    ]
 
     # 1. Remove resultados duplicados
     unique = filters.dedupe_results(results)
@@ -259,15 +284,32 @@ def select_sources(state: ResearchState) -> dict:
     if not candidates:
         return {"search_results": []}
     listing = "\n".join(f"- {r.title}\n  {r.url}\n  {r.snippet}" for r in candidates[:40])
+
     selector = llm.get_llm().with_structured_output(SourceSelection)
-    selection = selector.invoke(
-        SELECT_PROMPT.format(
-            objective=state["plan"]["objective"],
-            candidates=listing,
-            max_sources=config.MAX_SOURCES,
-        )
+
+    prompt = SELECT_PROMPT.format(
+        objective=state["plan"]["objective"],
+        candidates=listing,
+        max_sources=config.MAX_SOURCES,
     )
-    log.info("select_sources: %s", selection.reasoning)
+
+    log.info(
+        "select_sources: sending %d candidates, %d characters to LLM",
+        min(len(candidates), 40),
+        len(prompt),
+    )
+
+    started_at = perf_counter()
+
+    selection = selector.invoke(prompt)
+
+    elapsed = perf_counter() - started_at
+
+    log.info(
+        "select_sources: LLM completed in %.2f seconds",
+        elapsed,
+    )
+
     by_url = {r.url: r for r in candidates}
     chosen = [by_url[u] for u in selection.urls if u in by_url][: config.MAX_SOURCES]
     log.info("select_sources: fetching %d of %d candidates", len(chosen), len(candidates))
@@ -295,13 +337,13 @@ def should_retry_acquisition(
 
 def fetch(state: ResearchState) -> dict:
     """
-    Acquire selected resources while preserving one record per source.
+    Acquire selected resources while preserving input order.
 
     Previously acquired sources are reused unless their previous
     acquisition is eligible for retry and the attempt limit allows it.
     """
+    # 1. Preparation
     search_results = state.get("search_results", [])
-
     accumulated_resources = list(
         state.get("acquired_resources", [])
     )
@@ -322,12 +364,12 @@ def fetch(state: ResearchState) -> dict:
         for identity in identities:
             identity_to_index[identity] = index
 
-    # Avoid retrying the same source twice within one search round.
     processed_this_round: set[str] = set()
+    processed_indices: set[int] = set()
+    jobs = []
 
-    acquired_this_round = 0
-
-    for result in search_results:
+    # 2. Build acquisition jobs
+    for position, result in enumerate(search_results):
         identity = filters.normalize_source_url(result.url)
 
         if identity in processed_this_round:
@@ -336,6 +378,12 @@ def fetch(state: ResearchState) -> dict:
         processed_this_round.add(identity)
 
         existing_index = identity_to_index.get(identity)
+
+        if (
+            existing_index is not None
+            and existing_index in processed_indices
+        ):
+            continue
 
         previous_resource = (
             accumulated_resources[existing_index]
@@ -358,64 +406,86 @@ def fetch(state: ResearchState) -> dict:
                 continue
 
             attempt_count = previous_resource.attempt_count + 1
+            processed_indices.add(existing_index)
 
         else:
             attempt_count = 1
 
-        try:
-            acquisition = acquire_resource(
+        jobs.append(
+            (position, result, attempt_count, existing_index)
+        )
+
+    # 3. Execute acquisitions concurrently
+    completed_results = {}
+
+    with ThreadPoolExecutor(
+        max_workers=config.MAX_CONCURRENT_ACQUISITIONS
+    ) as executor:
+
+        future_to_job = {
+            executor.submit(
+                acquire_resource,
                 search_result=result,
                 options=options,
+            ): (position, result, attempt_count, existing_index)
+            for position, result, attempt_count, existing_index in jobs
+        }
+
+        for future in as_completed(future_to_job):
+            position, result, attempt_count, existing_index = (
+                future_to_job[future]
             )
 
-        except Exception as exc:
-            log.exception(
-                "Unexpected acquisition error for %s",
+            try:
+                acquisition = future.result()
+
+            except Exception as exc:
+                log.exception(
+                    "Unexpected acquisition error for %s",
+                    result.url,
+                )
+
+                acquisition = AcquisitionResult(
+                    status=AcquisitionStatus.FAILED,
+                    error=AcquisitionError(
+                        code="UNEXPECTED_ACQUISITION_ERROR",
+                        message=str(exc),
+                    ),
+                )
+
+            resource_record = AcquiredResource(
+                search_result=result,
+                acquisition=acquisition,
+                attempt_count=attempt_count,
+            )
+
+            completed_results[position] = (
+                resource_record,
+                existing_index,
+            )
+
+            log.info(
+                "fetch: %s -> %s (attempt %d)",
                 result.url,
+                acquisition.status.value,
+                attempt_count,
             )
 
-            acquisition = AcquisitionResult(
-                status=AcquisitionStatus.FAILED,
-                error=AcquisitionError(
-                    code="UNEXPECTED_ACQUISITION_ERROR",
-                    message=str(exc),
-                ),
-            )
+    # 4. Consolidate results in original input order
+    acquired_this_round = 0
 
-        resource_record = AcquiredResource(
-            search_result=result,
-            acquisition=acquisition,
-            attempt_count=attempt_count,
-        )
+    for position in sorted(completed_results):
+        resource_record, existing_index = completed_results[position]
 
         if existing_index is not None:
-            # Replace the previous result instead of creating a duplicate.
             accumulated_resources[existing_index] = resource_record
-            resource_index = existing_index
-
         else:
             accumulated_resources.append(resource_record)
-            resource_index = len(accumulated_resources) - 1
-
-        identities = _get_resource_urls(
-            result,
-            acquisition,
-        )
-
-        for identity in identities:
-            identity_to_index[identity] = resource_index
 
         acquired_this_round += 1
 
-        log.info(
-            "fetch: %s -> %s (attempt %d)",
-            result.url,
-            acquisition.status.value,
-            attempt_count,
-        )
-
     log.info(
-        "fetch: processed %d acquisitions; %d total unique resources",
+        "fetch: processed %d acquisitions; %d total resources",
         acquired_this_round,
         len(accumulated_resources),
     )
@@ -423,7 +493,6 @@ def fetch(state: ResearchState) -> dict:
     return {
         "acquired_resources": accumulated_resources,
     }
-
 
 def route_after_fetch(state: ResearchState) -> str:
     """Branch based on unique usable sources, or search again."""

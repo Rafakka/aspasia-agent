@@ -10,6 +10,11 @@ from research_agent.ingestion.storage import (
     store_resource,
 )
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
+from research_agent.ingestion import storage
+
 
 def create_resource() -> Resource:
     return Resource(
@@ -82,3 +87,64 @@ def test_store_resource_rejects_empty_content():
     with pytest.raises(ValueError):
         store_resource(resource, b"")
 
+def test_store_resource_handles_concurrent_identical_content(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("ASPASIA_STORAGE_DIR", str(tmp_path))
+
+    content = b"<html><body>Concurrent content</body></html>"
+
+    barrier = Barrier(2)
+    original_replace = storage.os.replace
+
+    def synchronized_replace(source, destination):
+        barrier.wait(timeout=3)
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(
+        storage.os,
+        "replace",
+        synchronized_replace,
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(store_resource, create_resource(), content)
+            for _ in range(2)
+        ]
+
+        results = [future.result() for future in futures]
+
+    assert results[0].storage_path == results[1].storage_path
+    assert results[0].content_hash == results[1].content_hash
+
+    stored_file = tmp_path / results[0].storage_path
+
+    assert stored_file.exists()
+    assert stored_file.read_bytes() == content
+
+    assert list(tmp_path.glob("*.tmp")) == []
+
+def test_store_resource_removes_temporary_file_on_replace_failure(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("ASPASIA_STORAGE_DIR", str(tmp_path))
+
+    def failing_replace(source, destination):
+        raise OSError("Simulated storage failure")
+
+    monkeypatch.setattr(
+        storage.os,
+        "replace",
+        failing_replace,
+    )
+
+    with pytest.raises(OSError):
+        store_resource(
+            create_resource(),
+            b"<html>Some content</html>",
+        )
+
+    assert list(tmp_path.glob("*.tmp")) == []

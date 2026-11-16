@@ -137,3 +137,95 @@ def test_search_preserves_original_results(monkeypatch):
 
     assert result["search_results"][0] is original_result
 
+def test_search_defaults_to_all_when_source_selection_is_missing(monkeypatch):
+    results = [
+        SearchResult(
+            title="BBC article",
+            url="https://www.bbc.com/news/example",
+        ),
+        SearchResult(
+            title="Unknown article",
+            url="https://unknown.com/article",
+        ),
+    ]
+
+    monkeypatch.setattr(
+        nodes.search_tool,
+        "web_search",
+        lambda q, **kw: results,
+    )
+
+    state = {
+        "topic": "X",
+        "plan": PLAN,
+        "search_round": 0,
+    }
+
+    result = nodes.search(state)
+
+    assert len(result["search_results"]) == 2
+
+
+def test_search_returns_all_sources_when_verified_domains_are_empty(monkeypatch):
+    results = [
+        SearchResult(
+            title="BBC article",
+            url="https://www.bbc.com/news/example",
+        ),
+        SearchResult(
+            title="Unknown article",
+            url="https://unknown.com/article",
+        ),
+    ]
+
+    monkeypatch.setattr(
+        nodes.search_tool,
+        "web_search",
+        lambda q, **kw: results,
+    )
+
+    state = {
+        "topic": "X",
+        "plan": PLAN,
+        "search_round": 0,
+        "source_selection": SourceSelectionConfig(
+            mode=SourceSelectionMode.VERIFIED_ONLY,
+            verified_domains=set(),
+        ),
+    }
+
+    result = nodes.search(state)
+
+    assert len(result["search_results"]) == 2
+
+def test_search_removes_duplicate_results(monkeypatch):
+    original_result = SearchResult(
+        title="BBC article",
+        url="https://www.bbc.com/news/example",
+    )
+
+    duplicate_result = SearchResult(
+        title="BBC article",
+        url="https://www.bbc.com/news/example",
+    )
+
+    monkeypatch.setattr(
+        nodes.search_tool,
+        "web_search",
+        lambda q, **kw: [original_result, duplicate_result],
+    )
+
+    state = {
+        "topic": "X",
+        "plan": PLAN,
+        "search_round": 0,
+        "source_selection": SourceSelectionConfig(
+            mode=SourceSelectionMode.ALL,
+        ),
+    }
+
+    result = nodes.search(state)
+
+    assert len(result["search_results"]) == 1
+
+

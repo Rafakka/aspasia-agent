@@ -1,12 +1,11 @@
 
-
-
 import hashlib
 import os
 
+from uuid import UUID, uuid4
+
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import UUID
 
 from research_agent.core.models.resource import Resource, ResourceType
 
@@ -99,12 +98,25 @@ def store_resource(resource: Resource, content: bytes) -> Resource:
         absolute_path.parent.mkdir(parents=True, exist_ok=True)
 
         temporary_path = absolute_path.with_name(
-            f"{absolute_path.name}.tmp"
+            f"{absolute_path.name}.{uuid4().hex}.tmp"
         )
 
         try:
             temporary_path.write_bytes(content)
-            os.replace(temporary_path, absolute_path)
+
+            try:
+                os.replace(temporary_path, absolute_path)
+
+            except OSError:
+            # Another worker may have stored the same content first.
+                if (
+                    absolute_path.exists()
+                    and absolute_path.read_bytes() == content
+                ):
+                    temporary_path.unlink(missing_ok=True)
+                else:
+                    raise
+
         except OSError:
             temporary_path.unlink(missing_ok=True)
             raise
