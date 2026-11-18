@@ -8,9 +8,7 @@ from langgraph.runtime import Runtime
 
 from langgraph.types import Command, interrupt
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
-from research_agent.state import SearchResult
+from concurrent.futures import ThreadPoolExecutor
 
 from research_agent.discovery.runtime import ResearchContext
 
@@ -20,6 +18,9 @@ from research_agent.discovery.source_selection import (
         SourceSelectionConfig,
         SourceSelectionMode,
         )
+
+from research_agent.discovery.fetcher import fetch_resources
+
 from research_agent.core.persistence.repositories.verified_source_registry import (
         VerifiedSourceRegistry,
         )
@@ -27,16 +28,7 @@ from research_agent.core.persistence.repositories.verified_source_registry impor
 from . import config, llm
 from .toolkit import filters, search as search_tool
 
-from .ingestion.acquisition import (
-    AcquisitionError,
-    AcquisitionOptions,
-    AcquisitionResult,
-    AcquisitionStatus,
-    acquire_resource,
-)
-
 from .state import (
-    AcquiredResource,
     ResearchPlan,
     ResearchState,
     SourceSelection,
@@ -104,30 +96,6 @@ Requirements:
 - If sources disagree or evidence is thin, say so explicitly — do not paper over gaps.
 - End with a `## Sources` section listing each source as `[n] Title — URL`.
 - Do not invent facts that are not in the sources."""
-
-def _get_resource_urls(
-    discoveries: list[SearchResult],
-    acquisition: AcquisitionResult,
-) -> set[str]:
-    urls = {
-        discovery.url
-        for discovery in discoveries
-    }
-
-    urls.update(
-        url
-        for url in (
-            acquisition.original_url,
-            acquisition.final_url,
-            acquisition.resource.url if acquisition.resource else None,
-        )
-        if url is not None
-    )
-
-    return {
-        filters.normalize_source_url(url)
-        for url in urls
-    }
 
 
 def plan(state: ResearchState) -> dict:
@@ -319,228 +287,16 @@ def select_sources(state: ResearchState) -> dict:
     log.info("select_sources: fetching %d of %d candidates", len(chosen), len(candidates))
     return {"search_results": chosen}
 
-def should_retry_acquisition(
-    acquisition: AcquisitionResult,
-) -> bool:
-    """Determine whether an acquisition result is eligible for retry."""
-
-    if acquisition.extracted_content:
-        return False
-
-    if acquisition.error is None:
-        return False
-
-    retryable_errors = {
-        "DOWNLOAD_FAILED",
-        "EMPTY_RESOURCE",
-        "EXTRACTION_FAILED",
-        "UNEXPECTED_ACQUISITION_ERROR",
-    }
-
-    return acquisition.error.code in retryable_errors
-
 
 def fetch(state: ResearchState) -> dict:
-    """
-    Acquire selected resources while preserving input order.
-
-    Multiple discoveries can reference the same resource.
-    Previously acquired resources are reused unless eligible for retry.
-    """
-    # 1. Preparation
-    search_results = state.get("search_results", [])
-    accumulated_resources = list(
-        state.get("acquired_resources", [])
-    )
-
-    options = AcquisitionOptions(
-        store_original=True,
-        extract_content=True,
-    )
-
-    identity_to_index: dict[str, int] = {}
-
-    for index, item in enumerate(accumulated_resources):
-        identities = _get_resource_urls(
-            item.discoveries,
-            item.acquisition,
-        )
-
-        for identity in identities:
-            identity_to_index[identity] = index
-
-    processed_this_round = {}
-    processed_indices: set[int] = set()
-    discoveries_by_index: dict[int, list[SearchResult]] = {}
-    updated_discovery_indices: set[int] = set()
-    jobs = []
-
-    # 2. Build acquisition jobs
-    for position, result in enumerate(search_results):
-        identity = filters.normalize_source_url(result.url)
-
-        # This identity was already encountered this round.
-        if identity in processed_this_round:
-            target_type, target_index = processed_this_round[identity]
-
-            if target_type == "existing":
-                discoveries = discoveries_by_index[target_index]
-            else:
-                discoveries = jobs[target_index]["discoveries"]
-
-            if result not in discoveries:
-                discoveries.append(result)
-
-                if target_type == "existing":
-                    updated_discovery_indices.add(target_index)
-
-            continue
-
-        existing_index = identity_to_index.get(identity)
-
-        if existing_index is not None:
-            previous_resource = accumulated_resources[existing_index]
-
-            discoveries = discoveries_by_index.setdefault(
-                existing_index,
-                list(previous_resource.discoveries),
-            )
-
-            if result not in discoveries:
-                discoveries.append(result)
-                updated_discovery_indices.add(existing_index)
-
-            processed_this_round[identity] = (
-                "existing",
-                existing_index,
-            )
-
-            # Another URL may identify the same existing resource.
-            if existing_index in processed_indices:
-                continue
-
-            processed_indices.add(existing_index)
-
-            if (
-                previous_resource.attempt_count
-                >= config.MAX_ACQUISITION_ATTEMPTS
-                or not should_retry_acquisition(
-                    previous_resource.acquisition
-                )
-            ):
-                log.info(
-                    "fetch: skipping previously acquired source %s",
-                    result.url,
-                )
-                continue
-
-            attempt_count = previous_resource.attempt_count + 1
-
-        else:
-            attempt_count = 1
-            discoveries = [result]
-
-        jobs.append(
-            {
-                "position": position,
-                "result": result,
-                "attempt_count": attempt_count,
-                "existing_index": existing_index,
-                "discoveries": discoveries,
-            }
-        )
-
-        if existing_index is None:
-            processed_this_round[identity] = (
-                "job",
-                len(jobs) - 1,
-            )
-
-    # Preserve discoveries even when no new acquisition is necessary.
-    for index in updated_discovery_indices:
-        previous_resource = accumulated_resources[index]
-
-        accumulated_resources[index] = previous_resource.model_copy(
-            update={"discoveries": discoveries_by_index[index]}
-        )
-
-    # 3. Execute acquisitions concurrently
-    completed_results = {}
-
-    with ThreadPoolExecutor(
-        max_workers=config.MAX_CONCURRENT_ACQUISITIONS
-    ) as executor:
-
-        future_to_job = {
-            executor.submit(
-                acquire_resource,
-                search_result=job["result"],
-                options=options,
-            ): job
-            for job in jobs
-        }
-
-        for future in as_completed(future_to_job):
-            job = future_to_job[future]
-
-            try:
-                acquisition = future.result()
-
-            except Exception as exc:
-                log.exception(
-                    "Unexpected acquisition error for %s",
-                    job["result"].url,
-                )
-
-                acquisition = AcquisitionResult(
-                    status=AcquisitionStatus.FAILED,
-                    error=AcquisitionError(
-                        code="UNEXPECTED_ACQUISITION_ERROR",
-                        message=str(exc),
-                    ),
-                )
-
-            resource_record = AcquiredResource(
-                discoveries=job["discoveries"],
-                acquisition=acquisition,
-                attempt_count=job["attempt_count"],
-            )
-
-            completed_results[job["position"]] = (
-                resource_record,
-                job["existing_index"],
-            )
-
-            log.info(
-                "fetch: %s -> %s (attempt %d)",
-                job["result"].url,
-                acquisition.status.value,
-                job["attempt_count"],
-            )
-
-    # 4. Consolidate results in original input order
-    acquired_this_round = 0
-
-    for position in sorted(completed_results):
-        resource_record, existing_index = completed_results[position]
-
-        if existing_index is not None:
-            accumulated_resources[existing_index] = resource_record
-        else:
-            accumulated_resources.append(resource_record)
-
-        acquired_this_round += 1
-
-    log.info(
-        "fetch: processed %d acquisitions; %d total resources",
-        acquired_this_round,
-        len(accumulated_resources),
+    acquired_resources = fetch_resources(
+        search_results=state.get("search_results", []),
+        acquired_resources=state.get("acquired_resources", []),
     )
 
     return {
-        "acquired_resources": accumulated_resources,
+        "acquired_resources": acquired_resources,
     }
-
 
 def route_after_fetch(state: ResearchState) -> str:
     """Branch based on unique usable sources, or search again."""

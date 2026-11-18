@@ -1,10 +1,12 @@
 
 import pytest
 
+from research_agent.discovery import fetcher
+
 from research_agent import config, nodes
 from research_agent.state import SearchResult
 
-from research_agent.nodes import should_retry_acquisition
+from research_agent.discovery.fetcher import should_retry_acquisition
 
 from research_agent.ingestion.acquisition import (
     AcquisitionResult,
@@ -120,7 +122,7 @@ def test_fetch_skips_previously_successful_source(monkeypatch):
     def fail_if_called(*args, **kwargs):
         raise AssertionError("Source should not be acquired again")
 
-    monkeypatch.setattr(nodes, "acquire_resource", fail_if_called)
+    monkeypatch.setattr(fetcher, "acquire_resource", fail_if_called)
 
     previous = AcquiredResource(
         discoveries=[SearchResult(
@@ -158,7 +160,7 @@ def test_fetch_retries_retryable_source(monkeypatch):
             extracted_content="Recovered content",
         )
 
-    monkeypatch.setattr(nodes, "acquire_resource", fake_acquire)
+    monkeypatch.setattr(fetcher, "acquire_resource", fake_acquire)
 
     previous = AcquiredResource(
         discoveries=[SearchResult(
@@ -196,7 +198,7 @@ def test_fetch_skips_non_retryable_source(monkeypatch):
     def fail_if_called(*args, **kwargs):
         raise AssertionError("Source should not be retried")
 
-    monkeypatch.setattr(nodes, "acquire_resource", fail_if_called)
+    monkeypatch.setattr(fetcher, "acquire_resource", fail_if_called)
 
     previous = AcquiredResource(
         discoveries=[SearchResult(
@@ -230,7 +232,7 @@ def test_fetch_does_not_retry_after_max_attempts(monkeypatch):
     def fail_if_called(*args, **kwargs):
         raise AssertionError("Maximum attempts already reached")
 
-    monkeypatch.setattr(nodes, "acquire_resource", fail_if_called)
+    monkeypatch.setattr(fetcher, "acquire_resource", fail_if_called)
 
     previous = AcquiredResource(
         discoveries=[SearchResult(
@@ -321,7 +323,7 @@ def test_fetch_and_route_across_two_search_rounds(monkeypatch):
             extracted_content="Recovered research content",
         )
 
-    monkeypatch.setattr(nodes, "acquire_resource", fake_acquire)
+    monkeypatch.setattr(fetcher, "acquire_resource", fake_acquire)
 
     # First search round
     first_result = SearchResult(

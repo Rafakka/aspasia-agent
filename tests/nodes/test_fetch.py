@@ -2,6 +2,8 @@
 
 from research_agent import nodes
 
+from research_agent.discovery import fetcher
+
 from unittest.mock import MagicMock
 
 from threading import Barrier, Lock
@@ -32,7 +34,7 @@ def test_fetch_accumulates_acquired_resources(monkeypatch):
             status=AcquisitionStatus.SUCCESS,
         )
 
-    monkeypatch.setattr(nodes, "acquire_resource", fake_acquire)
+    monkeypatch.setattr(fetcher, "acquire_resource", fake_acquire)
 
     previous_result = SearchResult(
         title="Previous",
@@ -78,7 +80,7 @@ def test_fetch_continues_after_unexpected_acquisition_error(monkeypatch):
             status=AcquisitionStatus.SUCCESS,
         )
 
-    monkeypatch.setattr(nodes, "acquire_resource", fake_acquire)
+    monkeypatch.setattr(fetcher, "acquire_resource", fake_acquire)
 
     results = [
         SearchResult(title="Bad", url="https://bad.com"),
@@ -139,7 +141,7 @@ def test_fetch_retries_resource_discovered_by_final_url(
         return successful_acquisition
 
     monkeypatch.setattr(
-        nodes,
+        fetcher,
         "acquire_resource",
         fake_acquire_resource,
     )
@@ -209,7 +211,7 @@ def test_fetch_matches_final_url_without_resource(
         return successful_acquisition
 
     monkeypatch.setattr(
-        nodes,
+        fetcher,
         "acquire_resource",
         fake_acquire_resource,
     )
@@ -292,7 +294,7 @@ def test_fetch_respects_max_concurrent_acquisitions(monkeypatch):
             status=AcquisitionStatus.SUCCESS,
         )
 
-    monkeypatch.setattr(nodes, "acquire_resource", fake_acquire)
+    monkeypatch.setattr(fetcher, "acquire_resource", fake_acquire)
 
     results = [
         SearchResult(title=f"Article {i}", url=f"https://site{i}.com")
@@ -311,7 +313,7 @@ def test_fetch_deduplicates_same_url_within_round(monkeypatch):
         calls.append(search_result.url)
         return AcquisitionResult(status=AcquisitionStatus.SUCCESS)
 
-    monkeypatch.setattr(nodes, "acquire_resource", fake_acquire)
+    monkeypatch.setattr(fetcher, "acquire_resource", fake_acquire)
 
     url = "https://example.com/article"
 
@@ -355,7 +357,7 @@ def test_fetch_does_not_retry_after_attempt_limit(monkeypatch):
         calls.append(search_result.url)
         return AcquisitionResult(status=AcquisitionStatus.SUCCESS)
 
-    monkeypatch.setattr(nodes, "acquire_resource", fake_acquire)
+    monkeypatch.setattr(fetcher, "acquire_resource", fake_acquire)
 
     out = nodes.fetch({
         "search_results": [search_result],
@@ -394,7 +396,7 @@ def test_fetch_schedules_existing_resource_only_once(monkeypatch):
         calls.append(search_result.url)
         return AcquisitionResult(status=AcquisitionStatus.SUCCESS)
 
-    monkeypatch.setattr(nodes, "acquire_resource", fake_acquire)
+    monkeypatch.setattr(fetcher, "acquire_resource", fake_acquire)
 
     monkeypatch.setattr(
         nodes.config,
@@ -436,7 +438,7 @@ def test_fetch_preserves_input_order(monkeypatch):
         )
 
     monkeypatch.setattr(
-        nodes,
+        fetcher,
         "acquire_resource",
         fake_acquire,
     )
