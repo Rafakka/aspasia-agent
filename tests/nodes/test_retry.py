@@ -85,10 +85,11 @@ def test_should_not_retry_acquisition_with_extracted_content():
 
 def test_acquired_resource_defaults_to_one_attempt():
     resource = AcquiredResource(
-        search_result=SearchResult(
+        discoveries= [SearchResult(
             title="Example",
             url="https://example.com",
         ),
+    ],
         acquisition=AcquisitionResult(
             status=AcquisitionStatus.FAILED,
             error=AcquisitionError(
@@ -102,10 +103,11 @@ def test_acquired_resource_defaults_to_one_attempt():
 
 def test_acquired_resource_accepts_attempt_count():
     resource = AcquiredResource(
-        search_result=SearchResult(
+        discoveries=[SearchResult(
             title="Example",
             url="https://example.com",
-        ),
+        )
+    ],
         acquisition=AcquisitionResult(
             status=AcquisitionStatus.SUCCESS,
         ),
@@ -121,10 +123,11 @@ def test_fetch_skips_previously_successful_source(monkeypatch):
     monkeypatch.setattr(nodes, "acquire_resource", fail_if_called)
 
     previous = AcquiredResource(
-        search_result=SearchResult(
+        discoveries=[SearchResult(
             title="Source A",
             url="https://example.com/",
-        ),
+        )
+    ],
         acquisition=AcquisitionResult(
             status=AcquisitionStatus.SUCCESS,
             extracted_content="Existing content",
@@ -158,10 +161,11 @@ def test_fetch_retries_retryable_source(monkeypatch):
     monkeypatch.setattr(nodes, "acquire_resource", fake_acquire)
 
     previous = AcquiredResource(
-        search_result=SearchResult(
+        discoveries=[SearchResult(
             title="Source A",
             url="https://example.com",
-        ),
+        )
+    ],
         acquisition=AcquisitionResult(
             status=AcquisitionStatus.FAILED,
             error=AcquisitionError(
@@ -195,10 +199,11 @@ def test_fetch_skips_non_retryable_source(monkeypatch):
     monkeypatch.setattr(nodes, "acquire_resource", fail_if_called)
 
     previous = AcquiredResource(
-        search_result=SearchResult(
+        discoveries=[SearchResult(
             title="PDF Source",
             url="https://example.com/document.pdf",
-        ),
+        )
+    ],
         acquisition=AcquisitionResult(
             status=AcquisitionStatus.UNSUPPORTED_EXTRACTION,
             error=AcquisitionError(
@@ -228,10 +233,11 @@ def test_fetch_does_not_retry_after_max_attempts(monkeypatch):
     monkeypatch.setattr(nodes, "acquire_resource", fail_if_called)
 
     previous = AcquiredResource(
-        search_result=SearchResult(
+        discoveries=[SearchResult(
             title="Source A",
             url="https://example.com",
-        ),
+        )
+    ],
         acquisition=AcquisitionResult(
             status=AcquisitionStatus.FAILED,
             error=AcquisitionError(
@@ -262,20 +268,22 @@ def test_route_after_fetch_counts_unique_sources(monkeypatch):
 
     resources = [
         AcquiredResource(
-            search_result=SearchResult(
+            discoveries=[SearchResult(
                 title="Source A",
                 url="https://example.com/article/",
-            ),
+            )
+        ],
             acquisition=AcquisitionResult(
                 status=AcquisitionStatus.SUCCESS,
                 extracted_content="Content A",
             ),
         ),
         AcquiredResource(
-            search_result=SearchResult(
+            discoveries=[SearchResult(
                 title="Source A duplicate",
                 url="https://EXAMPLE.com/article",
-            ),
+            )
+        ],
             acquisition=AcquisitionResult(
                 status=AcquisitionStatus.SUCCESS,
                 extracted_content="Content A duplicate",

@@ -105,24 +105,28 @@ Requirements:
 - End with a `## Sources` section listing each source as `[n] Title — URL`.
 - Do not invent facts that are not in the sources."""
 
-
 def _get_resource_urls(
-    search_result: SearchResult,
+    discoveries: list[SearchResult],
     acquisition: AcquisitionResult,
 ) -> set[str]:
     urls = {
-        search_result.url,
-        acquisition.original_url,
-        acquisition.final_url,
+        discovery.url
+        for discovery in discoveries
     }
 
-    if acquisition.resource:
-        urls.add(acquisition.resource.url)
+    urls.update(
+        url
+        for url in (
+            acquisition.original_url,
+            acquisition.final_url,
+            acquisition.resource.url if acquisition.resource else None,
+        )
+        if url is not None
+    )
 
     return {
         filters.normalize_source_url(url)
         for url in urls
-        if url
     }
 
 
@@ -335,12 +339,13 @@ def should_retry_acquisition(
 
     return acquisition.error.code in retryable_errors
 
+
 def fetch(state: ResearchState) -> dict:
     """
     Acquire selected resources while preserving input order.
 
-    Previously acquired sources are reused unless their previous
-    acquisition is eligible for retry and the attempt limit allows it.
+    Multiple discoveries can reference the same resource.
+    Previously acquired resources are reused unless eligible for retry.
     """
     # 1. Preparation
     search_results = state.get("search_results", [])
@@ -357,41 +362,65 @@ def fetch(state: ResearchState) -> dict:
 
     for index, item in enumerate(accumulated_resources):
         identities = _get_resource_urls(
-            item.search_result,
+            item.discoveries,
             item.acquisition,
         )
 
         for identity in identities:
             identity_to_index[identity] = index
 
-    processed_this_round: set[str] = set()
+    processed_this_round = {}
     processed_indices: set[int] = set()
+    discoveries_by_index: dict[int, list[SearchResult]] = {}
+    updated_discovery_indices: set[int] = set()
     jobs = []
 
     # 2. Build acquisition jobs
     for position, result in enumerate(search_results):
         identity = filters.normalize_source_url(result.url)
 
+        # This identity was already encountered this round.
         if identity in processed_this_round:
-            continue
+            target_type, target_index = processed_this_round[identity]
 
-        processed_this_round.add(identity)
+            if target_type == "existing":
+                discoveries = discoveries_by_index[target_index]
+            else:
+                discoveries = jobs[target_index]["discoveries"]
+
+            if result not in discoveries:
+                discoveries.append(result)
+
+                if target_type == "existing":
+                    updated_discovery_indices.add(target_index)
+
+            continue
 
         existing_index = identity_to_index.get(identity)
 
-        if (
-            existing_index is not None
-            and existing_index in processed_indices
-        ):
-            continue
+        if existing_index is not None:
+            previous_resource = accumulated_resources[existing_index]
 
-        previous_resource = (
-            accumulated_resources[existing_index]
-            if existing_index is not None
-            else None
-        )
+            discoveries = discoveries_by_index.setdefault(
+                existing_index,
+                list(previous_resource.discoveries),
+            )
 
-        if previous_resource is not None:
+            if result not in discoveries:
+                discoveries.append(result)
+                updated_discovery_indices.add(existing_index)
+
+            processed_this_round[identity] = (
+                "existing",
+                existing_index,
+            )
+
+            # Another URL may identify the same existing resource.
+            if existing_index in processed_indices:
+                continue
+
+            processed_indices.add(existing_index)
+
             if (
                 previous_resource.attempt_count
                 >= config.MAX_ACQUISITION_ATTEMPTS
@@ -406,13 +435,33 @@ def fetch(state: ResearchState) -> dict:
                 continue
 
             attempt_count = previous_resource.attempt_count + 1
-            processed_indices.add(existing_index)
 
         else:
             attempt_count = 1
+            discoveries = [result]
 
         jobs.append(
-            (position, result, attempt_count, existing_index)
+            {
+                "position": position,
+                "result": result,
+                "attempt_count": attempt_count,
+                "existing_index": existing_index,
+                "discoveries": discoveries,
+            }
+        )
+
+        if existing_index is None:
+            processed_this_round[identity] = (
+                "job",
+                len(jobs) - 1,
+            )
+
+    # Preserve discoveries even when no new acquisition is necessary.
+    for index in updated_discovery_indices:
+        previous_resource = accumulated_resources[index]
+
+        accumulated_resources[index] = previous_resource.model_copy(
+            update={"discoveries": discoveries_by_index[index]}
         )
 
     # 3. Execute acquisitions concurrently
@@ -425,16 +474,14 @@ def fetch(state: ResearchState) -> dict:
         future_to_job = {
             executor.submit(
                 acquire_resource,
-                search_result=result,
+                search_result=job["result"],
                 options=options,
-            ): (position, result, attempt_count, existing_index)
-            for position, result, attempt_count, existing_index in jobs
+            ): job
+            for job in jobs
         }
 
         for future in as_completed(future_to_job):
-            position, result, attempt_count, existing_index = (
-                future_to_job[future]
-            )
+            job = future_to_job[future]
 
             try:
                 acquisition = future.result()
@@ -442,7 +489,7 @@ def fetch(state: ResearchState) -> dict:
             except Exception as exc:
                 log.exception(
                     "Unexpected acquisition error for %s",
-                    result.url,
+                    job["result"].url,
                 )
 
                 acquisition = AcquisitionResult(
@@ -454,21 +501,21 @@ def fetch(state: ResearchState) -> dict:
                 )
 
             resource_record = AcquiredResource(
-                search_result=result,
+                discoveries=job["discoveries"],
                 acquisition=acquisition,
-                attempt_count=attempt_count,
+                attempt_count=job["attempt_count"],
             )
 
-            completed_results[position] = (
+            completed_results[job["position"]] = (
                 resource_record,
-                existing_index,
+                job["existing_index"],
             )
 
             log.info(
                 "fetch: %s -> %s (attempt %d)",
-                result.url,
+                job["result"].url,
                 acquisition.status.value,
-                attempt_count,
+                job["attempt_count"],
             )
 
     # 4. Consolidate results in original input order
@@ -494,18 +541,20 @@ def fetch(state: ResearchState) -> dict:
         "acquired_resources": accumulated_resources,
     }
 
+
 def route_after_fetch(state: ResearchState) -> str:
     """Branch based on unique usable sources, or search again."""
 
     acquired_resources = state.get("acquired_resources", [])
 
     usable_results = [
-        item.search_result
+        discovery
         for item in acquired_resources
         if (
             item.acquisition.extracted_content
             and item.acquisition.extracted_content.strip()
         )
+        for discovery in item.discoveries
     ]
 
     unique_results = filters.dedupe_results(usable_results)
@@ -552,8 +601,14 @@ def synthesize(state: ResearchState) -> dict:
 
     source_blocks = "\n\n".join(
         (
-            f'<source id="{i}" title="{item.search_result.title}" '
-            f'url="{item.search_result.url}">\n'
+            f'<source id="{i}">\n'
+            f'<discoveries>\n'
+            + "\n".join(
+                f'<discovery title="{discovery.title}" '
+                f'url="{discovery.url}" />'
+                for discovery in item.discoveries
+            )
+            + '\n</discoveries>\n'
             f'{item.acquisition.extracted_content}\n'
             f'</source>'
         )

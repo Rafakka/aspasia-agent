@@ -40,7 +40,7 @@ def test_fetch_accumulates_acquired_resources(monkeypatch):
     )
 
     previous_resource = AcquiredResource(
-        search_result=previous_result,
+        discoveries=[previous_result],
         acquisition=AcquisitionResult(
             status=AcquisitionStatus.SUCCESS,
         ),
@@ -66,8 +66,8 @@ def test_fetch_accumulates_acquired_resources(monkeypatch):
     assert out["acquired_resources"][0] is previous_resource
 
     # New results must be appended.
-    assert out["acquired_resources"][1].search_result.url == "https://a.com"
-    assert out["acquired_resources"][2].search_result.url == "https://b.com"
+    assert out["acquired_resources"][1].discoveries[0].url == "https://a.com"
+    assert out["acquired_resources"][2].discoveries[0].url == "https://b.com"
 
 def test_fetch_continues_after_unexpected_acquisition_error(monkeypatch):
     def fake_acquire(search_result, options=None):
@@ -118,7 +118,7 @@ def test_fetch_retries_resource_discovered_by_final_url(
     )
 
     previous_resource = AcquiredResource(
-        search_result=search_result,
+        discoveries=[search_result],
         acquisition=failed_acquisition,
         attempt_count=1,
     )
@@ -160,9 +160,10 @@ def test_fetch_retries_resource_discovered_by_final_url(
 
     updated_resource = result["acquired_resources"][0]
 
-    assert updated_resource.attempt_count == 2
-    assert updated_resource.search_result.url == final_url
-    assert updated_resource.acquisition is successful_acquisition
+    assert len(updated_resource.discoveries) == 2
+
+    assert updated_resource.discoveries[0].url == original_url
+    assert updated_resource.discoveries[1].url == final_url
 
 
 def test_fetch_matches_final_url_without_resource(
@@ -187,7 +188,7 @@ def test_fetch_matches_final_url_without_resource(
     )
 
     previous_resource = AcquiredResource(
-        search_result=previous_search_result,
+        discoveries=[previous_search_result],
         acquisition=failed_acquisition,
         attempt_count=1,
     )
@@ -337,7 +338,7 @@ def test_fetch_does_not_retry_after_attempt_limit(monkeypatch):
     )
 
     previous_resource = AcquiredResource(
-        search_result=search_result,
+        discoveries=[search_result],
         acquisition=AcquisitionResult(
             status=AcquisitionStatus.FAILED,
             error=AcquisitionError(
@@ -374,7 +375,7 @@ def test_fetch_schedules_existing_resource_only_once(monkeypatch):
     )
 
     previous_resource = AcquiredResource(
-        search_result=previous_result,
+        discoveries=[previous_result],
         acquisition=AcquisitionResult(
             status=AcquisitionStatus.FAILED,
             original_url=original_url,
@@ -449,7 +450,7 @@ def test_fetch_preserves_input_order(monkeypatch):
     out = nodes.fetch({"search_results": results})
 
     output_order = [
-        item.search_result.url
+        item.discoveries[0].url
         for item in out["acquired_resources"]
     ]
 

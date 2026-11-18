@@ -46,8 +46,7 @@ class AcquiredResource(BaseModel):
 
     This is a graph execution object, not a domain entity.
     """
-
-    search_result: SearchResult
+    discoveries: list[SearchResult] = Field(min_length=1)
     acquisition: AcquisitionResult
     attempt_count: int = Field(default=1, ge=1)
 

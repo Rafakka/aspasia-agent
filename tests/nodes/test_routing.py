@@ -14,29 +14,32 @@ def test_route_after_fetch_counts_extracted_content(monkeypatch):
 
     results = [
         AcquiredResource(
-            search_result=SearchResult(
+            discoveries=[SearchResult(
                 title="HTML A",
                 url="https://a.com",
-            ),
+            )
+        ],
             acquisition=AcquisitionResult(
                 status=AcquisitionStatus.SUCCESS,
                 extracted_content="Useful extracted content",
             ),
         ),
         AcquiredResource(
-            search_result=SearchResult(
+            discoveries=[SearchResult(
                 title="PDF",
                 url="https://b.com/file.pdf",
-            ),
+            )
+        ],
             acquisition=AcquisitionResult(
                 status=AcquisitionStatus.UNSUPPORTED_EXTRACTION,
             ),
         ),
         AcquiredResource(
-            search_result=SearchResult(
+            discoveries=[SearchResult(
                 title="HTML C",
                 url="https://c.com",
-            ),
+            )
+        ],
             acquisition=AcquisitionResult(
                 status=AcquisitionStatus.SUCCESS,
                 extracted_content="   ",
@@ -59,27 +62,32 @@ def test_route_after_fetch_synthesizes_with_enough_content(monkeypatch):
 
     results = [
         AcquiredResource(
-            search_result=SearchResult(title="A", url="https://a.com"),
+            discoveries=[
+                SearchResult(title="A", url="https://a.com")
+                ],
+
             acquisition=AcquisitionResult(
                 status=AcquisitionStatus.SUCCESS,
                 extracted_content="Content A",
             ),
         ),
         AcquiredResource(
-            search_result=SearchResult(title="B", url="https://b.com"),
-            acquisition=AcquisitionResult(
-                status=AcquisitionStatus.PARTIAL,
-                extracted_content="Content B",
-            ),
-        ),
-    ]
+            discoveries=[
+                SearchResult(title="B", url="https://b.com")
+                ],
+                acquisition=AcquisitionResult(
+                    status=AcquisitionStatus.PARTIAL,
+                    extracted_content="Content B",
+                    ),
+                ),
+            ]
 
     result = nodes.route_after_fetch(
         {
             "acquired_resources": results,
             "search_round": 0,
-        }
-    )
+            }
+        )
 
     assert result == "synthesize"
 
@@ -108,10 +116,11 @@ def test_route_after_fetch_respects_max_search_rounds(monkeypatch):
 def test_route_after_fetch(n_sources, search_round, expected):
     acquired_resources = [
         AcquiredResource(
-            search_result=SearchResult(
+            discoveries=[SearchResult(
                 title=f"Source {i}",
                 url=f"https://source{i}.com",
-            ),
+                )
+            ],
             acquisition=AcquisitionResult(
                 status=AcquisitionStatus.SUCCESS,
                 extracted_content="Useful extracted content",
@@ -133,20 +142,24 @@ def test_route_after_fetch_counts_same_domain_as_one_source(monkeypatch):
 
     resources = [
         AcquiredResource(
-            search_result=SearchResult(
-                title="Artigo 1",
-                url="https://historia.com.br/artigo-1",
-            ),
+            discoveries=[
+                SearchResult(
+                    title="Artigo 1",
+                    url="https://historia.com.br/artigo-1",)
+                ],
             acquisition=AcquisitionResult(
                 status=AcquisitionStatus.SUCCESS,
                 extracted_content="Conteúdo 1",
+                ),
             ),
-        ),
+
         AcquiredResource(
-            search_result=SearchResult(
+            discoveries=[
+                SearchResult(
                 title="Artigo 2",
                 url="https://www.historia.com.br/artigo-2",
-            ),
+            )
+                ],
             acquisition=AcquisitionResult(
                 status=AcquisitionStatus.SUCCESS,
                 extracted_content="Conteúdo 2",
@@ -165,20 +178,21 @@ def test_route_after_fetch_counts_different_domains_separately(monkeypatch):
 
     resources = [
         AcquiredResource(
-            search_result=SearchResult(
+            discoveries=[SearchResult(
                 title="História",
                 url="https://historia.com.br/artigo",
-            ),
+            )]
+            ,
             acquisition=AcquisitionResult(
                 status=AcquisitionStatus.SUCCESS,
                 extracted_content="Conteúdo 1",
             ),
         ),
         AcquiredResource(
-            search_result=SearchResult(
+            discoveries=[SearchResult(
                 title="BBC",
                 url="https://bbc.co.uk/news",
-            ),
+            )],
             acquisition=AcquisitionResult(
                 status=AcquisitionStatus.SUCCESS,
                 extracted_content="Conteúdo 2",

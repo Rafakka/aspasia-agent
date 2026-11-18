@@ -36,10 +36,10 @@ def test_synthesize_uses_acquired_resources(monkeypatch):
     monkeypatch.setattr(nodes.llm, "get_llm", lambda: FakeLLM())
 
     resource = AcquiredResource(
-        search_result=SearchResult(
+        discoveries=[SearchResult(
             title="Source A",
             url="https://source.com",
-        ),
+        )],
         acquisition=AcquisitionResult(
             status=AcquisitionStatus.SUCCESS,
             extracted_content="Useful extracted content",
