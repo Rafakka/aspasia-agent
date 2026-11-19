@@ -6,6 +6,8 @@ from time import perf_counter
 
 from langgraph.runtime import Runtime
 
+from langgraph.config import get_stream_writer
+
 from langgraph.types import Command, interrupt
 
 from concurrent.futures import ThreadPoolExecutor
@@ -13,6 +15,11 @@ from concurrent.futures import ThreadPoolExecutor
 from research_agent.discovery.runtime import ResearchContext
 
 from research_agent.discovery.source_filter import SourceFilter
+
+from research_agent.core.observability.events import (
+        operation_started,
+        operation_finished,
+        )
 
 from research_agent.discovery.source_selection import (
         SourceSelectionConfig,
@@ -108,10 +115,40 @@ def plan(state: ResearchState) -> dict:
         else ""
     )
     log.info("plan: drafting plan for topic %r%s", state["topic"], " (revision)" if feedback else "")
+
     planner = llm.get_llm().with_structured_output(ResearchPlan)
-    research_plan = planner.invoke(
-        PLAN_PROMPT.format(topic=state["topic"], feedback_block=feedback_block)
+
+    try:
+        writer = get_stream_writer()
+    except RuntimeError:
+        writer = lambda event: None
+
+    prompt = PLAN_PROMPT.format(
+        topic=state["topic"],
+        feedback_block=feedback_block,
     )
+
+    writer(operation_started("planner"))
+
+    started_at = perf_counter()
+    status = "success"
+
+    try:
+        research_plan = planner.invoke(prompt)
+    except Exception:
+        status = "error"
+        raise
+    finally:
+        duration = perf_counter() - started_at
+
+        writer(
+                operation_finished(
+                    operation="planner",
+                    duration=duration,
+                    status=status,
+                    )
+                )
+
     log.info("plan: objective=%r queries=%s", research_plan.objective, research_plan.search_queries)
     # stored as a plain dict so checkpointed state stays serializer-friendly
     return {"plan": research_plan.model_dump(), "feedback": ""}
@@ -255,7 +292,11 @@ def select_sources(state: ResearchState) -> dict:
     candidates = state["search_results"]
     if not candidates:
         return {"search_results": []}
-    listing = "\n".join(f"- {r.title}\n  {r.url}\n  {r.snippet}" for r in candidates[:40])
+
+    listing = "\n".join(
+        f"- {r.title}\n  {r.url}\n  {r.snippet}"
+        for r in candidates[:40]
+    )
 
     selector = llm.get_llm().with_structured_output(SourceSelection)
 
@@ -271,11 +312,31 @@ def select_sources(state: ResearchState) -> dict:
         len(prompt),
     )
 
+    try:
+        writer = get_stream_writer()
+    except RuntimeError:
+        writer = lambda event: None
+
+    writer(operation_started("select_sources"))
+
     started_at = perf_counter()
+    status = "success"
 
-    selection = selector.invoke(prompt)
+    try:
+        selection = selector.invoke(prompt)
+    except Exception:
+        status = "error"
+        raise
+    finally:
+        elapsed = perf_counter() - started_at
 
-    elapsed = perf_counter() - started_at
+        writer(
+            operation_finished(
+                operation="select_sources",
+                duration=elapsed,
+                status=status,
+            )
+        )
 
     log.info(
         "select_sources: LLM completed in %.2f seconds",
@@ -283,16 +344,36 @@ def select_sources(state: ResearchState) -> dict:
     )
 
     by_url = {r.url: r for r in candidates}
-    chosen = [by_url[u] for u in selection.urls if u in by_url][: config.MAX_SOURCES]
-    log.info("select_sources: fetching %d of %d candidates", len(chosen), len(candidates))
+    chosen = [
+        by_url[u]
+        for u in selection.urls
+        if u in by_url
+    ][: config.MAX_SOURCES]
+
+    log.info(
+        "select_sources: fetching %d of %d candidates",
+        len(chosen),
+        len(candidates),
+    )
+
     return {"search_results": chosen}
 
-
 def fetch(state: ResearchState) -> dict:
+
+    start = perf_counter()
+
     acquired_resources = fetch_resources(
         search_results=state.get("search_results", []),
         acquired_resources=state.get("acquired_resources", []),
     )
+
+    duration = perf_counter() - start
+
+    log.info(
+            "[PERF] fetch_resources | duration=%.2fs | resources=%d",
+            duration,
+            len(acquired_resources),
+            )
 
     return {
         "acquired_resources": acquired_resources,
@@ -380,15 +461,17 @@ def synthesize(state: ResearchState) -> dict:
         len(usable_resources),
     )
 
-    response = llm.get_llm().invoke(
-        SYNTHESIZE_PROMPT.format(
-            topic=state["topic"],
-            objective=state["plan"]["objective"],
-            outline=outline,
-            sources=source_blocks,
-        )
+    prompt = SYNTHESIZE_PROMPT.format(
+        topic=state["topic"],
+        objective=state["plan"]["objective"],
+        outline=outline,
+        sources=source_blocks,
     )
 
+    with open("debug_synthesis_prompt.txt", "w", encoding="utf-8") as file:
+        file.write(prompt)
+
+    response = llm.get_llm().invoke(prompt)
     usage = getattr(response, "usage_metadata", None)
 
     if usage:

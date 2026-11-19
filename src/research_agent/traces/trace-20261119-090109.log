@@ -1,0 +1,2 @@
+2026-11-19 09:01:09,585 INFO    research_agent.cli: run start: topic='quem foi aspasia' auto=False
+2026-11-19 09:01:09,598 INFO    research_agent.nodes: plan: drafting plan for topic 'quem foi aspasia'

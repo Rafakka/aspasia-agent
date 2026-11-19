@@ -1,0 +1,2 @@
+2026-11-19 08:50:50,617 INFO    research_agent.cli: run start: topic='Tema de teste' auto=False
+2026-11-19 08:50:50,630 INFO    research_agent.nodes: plan: drafting plan for topic 'Tema de teste'

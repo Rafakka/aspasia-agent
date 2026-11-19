@@ -9,5 +9,7 @@ from . import config
 def get_llm(max_tokens: int | None = None) -> BaseChatModel:
     return ChatOllama(
         model=config.MODEL,
+        reasoning=False,
         base_url="http://127.0.0.1:11434",
+        client_kwargs={"trust_env": False},
     )

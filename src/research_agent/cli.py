@@ -10,6 +10,9 @@ import re
 import sys
 import uuid
 from pathlib import Path
+import itertools
+import sys
+import threading
 
 from langgraph.types import Command
 
@@ -21,6 +24,29 @@ from research_agent.discovery.runtime import ResearchContext
 
 log = logging.getLogger("research_agent.cli")
 
+class Spinner:
+    def __init__(self, message: str):
+        self.message = message
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self._spin, daemon=True)
+
+    def _spin(self):
+        frames = itertools.cycle(["|", "/", "-", "\\"])
+
+        while not self.stop_event.is_set():
+            frame = next(frames)
+            sys.stdout.write(f"\r[{frame}] {self.message}")
+            sys.stdout.flush()
+            self.stop_event.wait(0.1)
+
+    def start(self):
+        self.thread.start()
+
+    def stop(self):
+        self.stop_event.set()
+        self.thread.join()
+        sys.stdout.write("\r" + " " * (len(self.message) + 10) + "\r")
+        sys.stdout.flush()
 
 def _slugify(text: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
@@ -59,8 +85,6 @@ def _ask_source_configuration(
             print("Research aborted.")
             sys.exit(0)
 
-
-
 def _print_plan(plan: dict) -> None:
     print("\n=== Proposed research plan ===")
     print(f"Objective: {plan['objective']}\n")
@@ -90,6 +114,67 @@ def _ask_approval(plan: dict, auto: bool) -> dict:
             print("Aborted before any searching happened.")
             sys.exit(0)
 
+def _stream_graph(app, input_data, run_config, context):
+    result = None
+    interrupts = None
+    spinner = None
+
+    try:
+        for mode, chunk in app.stream(
+            input_data,
+            run_config,
+            context=context,
+            stream_mode=["updates", "values", "custom"],
+        ):
+            if mode == "updates":
+                for node, update in chunk.items():
+                    if node == "__interrupt__":
+                        interrupts = update
+                        print("[GRAPH] Human interruption")
+                        continue
+
+                    print(f"[GRAPH] Node completed: {node}")
+
+            elif mode == "values":
+                result = chunk
+
+            elif mode == "custom":
+                event = chunk.get("event")
+
+                if event == "operation_started":
+                    operation = chunk["operation"]
+
+                    if spinner is not None:
+                        spinner.stop()
+
+                    spinner = Spinner(f"{operation} processing...")
+                    spinner.start()
+
+                elif event == "operation_finished":
+                    if spinner is not None:
+                        spinner.stop()
+                        spinner = None
+
+                    status = chunk["status"]
+                    duration = chunk["duration"]
+                    operation = chunk["operation"]
+
+                    print(
+                        f"[LLM] {operation} {status} "
+                        f"| duration={duration:.2f}s"
+                    )
+
+    finally:
+        if spinner is not None:
+            spinner.stop()
+
+    if result is None:
+        result = {}
+
+    if interrupts is not None:
+        result["__interrupt__"] = interrupts
+
+    return result
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Research a topic and write a cited report.")
@@ -106,7 +191,12 @@ def main() -> None:
 
     context = ResearchContext(session_factory=SessionLocal)
 
-    result = app.invoke({"topic": args.topic}, run_config, context=context)
+    result = _stream_graph(
+            app,
+            {"topic":args.topic},
+            run_config,
+            context,
+            )
 
     while "__interrupt__" in result:
         payload = result["__interrupt__"][0].value

@@ -6,6 +6,8 @@ from enum import StrEnum
 
 import httpx
 
+import trafilatura
+
 from pydantic import BaseModel
 
 from research_agent.core.models.resource import Resource, ResourceType
@@ -21,6 +23,22 @@ logger = logging.getLogger(__name__)
 USER_AGENT = "Mozilla/5.0 (compatible; AspasiaResearchAgent/1.0)"
 REQUEST_TIMEOUT = 30.0
 
+def _fallback_download(url: str) -> bytes | None:
+    """Attempt to download HTML using Trafilatura."""
+    try:
+        downloaded_html = trafilatura.fetch_url(url)
+
+        if not downloaded_html:
+            return None
+
+        return downloaded_html.encode("utf-8")
+
+    except Exception:
+        logger.exception(
+            "Trafilatura fallback failed: %s",
+            url,
+        )
+        return None
 
 class AcquisitionStatus(StrEnum):
     SUCCESS = "success"
@@ -146,6 +164,11 @@ def acquire_resource(
 
     response = None
     # 1. Download resource.
+
+    content = None
+    final_url = None
+    content_type = None
+
     try:
         response = httpx.get(
             original_url,
@@ -157,26 +180,34 @@ def acquire_resource(
         final_url = str(response.url)
         response.raise_for_status()
 
+        content = response.content
+        content_type = response.headers.get("content-type")
+
     except httpx.HTTPError as exc:
         logger.warning(
             "Resource download failed: %s",
             search_result.url,
             exc_info=True,
         )
-        return _failure(
-            code="DOWNLOAD_FAILED",
-            message=str(exc),
-            original_url=original_url,
-            final_url=(
-                str(response.url)
-                if response is not None
-                else None
-            ),
-        )
 
-    content = response.content
-    final_url = str(response.url)
-    content_type = response.headers.get("content-type")
+        content = _fallback_download(original_url)
+
+        if content:
+            final_url = original_url
+            content_type = "text/html"
+
+            logger.info(
+                    "Resource recovered using Trafilatura: %s",
+                    original_url,
+                    )
+
+        else:
+            return _failure(
+                code="DOWNLOAD_FAILED",
+                message=str(exc),
+                original_url=original_url,
+                final_url=final_url,
+            )
 
     if not content:
         return _failure(
